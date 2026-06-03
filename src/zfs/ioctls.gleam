@@ -1579,11 +1579,24 @@ pub fn promote(hdl: Handle, name: String) -> Result(Nil, Error) {
   ioctl_unit(hdl, ZfsIocPromote, ZfsCmdReq(Some(name), []))
 }
 
-pub fn snapshot(hdl: Handle, name: String, args: NvList) -> Result(Nil, Error) {
+pub fn snapshot(
+  hdl: Handle,
+  name: String,
+  snaps: NvList,
+  props: Option(NvList),
+) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocSnapshot,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(
+      Some(name),
+      data: option.values([
+        nvlist_opt([
+          Some(nvl.Nvlist("snaps", snaps)),
+          option.map(props, nvl.Nvlist("props", _)),
+        ]),
+      ]),
+    ),
   )
 }
 
@@ -1803,19 +1816,32 @@ pub fn userspace_upgrade(hdl: Handle, name: String) -> Result(Nil, Error) {
   ioctl_unit(hdl, ZfsIocUserspaceUpgrade, ZfsCmdReq(Some(name), []))
 }
 
-pub fn hold(hdl: Handle, name: String, args: NvList) -> Result(Nil, Error) {
+pub fn hold(
+  hdl: Handle,
+  name: String,
+  holds: NvList,
+  cleanup_fd: Option(Int),
+) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocHold,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(
+      Some(name),
+      data: option.values([
+        nvlist_opt([
+          Some(nvl.Nvlist("holds", holds)),
+          option.map(cleanup_fd, nvl.Int32("cleanup_fd", _)),
+        ]),
+      ]),
+    ),
   )
 }
 
-pub fn release(hdl: Handle, name: String, args: NvList) -> Result(Nil, Error) {
+pub fn release(hdl: Handle, name: String, holds: NvList) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocRelease,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(Some(name), data: [nvs.pack(holds, nvs.Native)]),
   )
 }
 
@@ -1980,38 +2006,51 @@ pub fn space_written(
 pub fn space_snaps(
   hdl: Handle,
   name: String,
-  args: NvList,
+  firstsnap: String,
 ) -> Result(NvList, Error) {
   ioctl_nvlist(
     hdl,
     ZfsIocSpaceSnaps,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(Some(name), data: [nvlist([nvl.String("firstsnap", firstsnap)])]),
   )
 }
 
 pub fn destroy_snaps(
   hdl: Handle,
   name: String,
-  args: NvList,
+  snaps: NvList,
+  defer: Bool,
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocDestroySnaps,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(
+      Some(name),
+      data: option.values([
+        nvlist_opt([
+          Some(nvl.Nvlist("snaps", snaps)),
+          opt(defer, nvl.Boolean("defer")),
+        ]),
+      ]),
+    ),
   )
 }
 
 pub fn pool_reguid(
   hdl: Handle,
   name: String,
-  args: Option(NvList),
+  guid: Option(Int),
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocPoolReguid,
     ZfsCmdReq(
       Some(name),
-      data: option.values([option.map(args, nvs.pack(_, nvs.Native))]),
+      data: option.values([
+        nvlist_opt([
+          option.map(guid, nvl.Uint64("guid", _)),
+        ]),
+      ]),
     ),
   )
 }
@@ -2019,14 +2058,18 @@ pub fn pool_reguid(
 pub fn pool_reopen(
   hdl: Handle,
   name: String,
-  args: Option(NvList),
+  scrub_restart: Bool,
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocPoolReopen,
     ZfsCmdReq(
       Some(name),
-      data: option.values([option.map(args, nvs.pack(_, nvs.Native))]),
+      data: option.values([
+        nvlist_opt([
+          opt(scrub_restart, nvl.BooleanValue("scrub_restart", True)),
+        ]),
+      ]),
     ),
   )
 }
@@ -2049,11 +2092,11 @@ pub fn send_progress(
   Ok(#(written, traversed))
 }
 
-pub fn log_history(hdl: Handle, args: NvList) -> Result(Nil, Error) {
+pub fn log_history(hdl: Handle, message: String) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocLogHistory,
-    ZfsCmdReq(None, data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(None, data: [nvlist([nvl.String("message", message)])]),
   )
 }
 
@@ -2084,19 +2127,38 @@ pub fn send_space(
   )
 }
 
-pub fn clone(hdl: Handle, name: String, args: NvList) -> Result(Nil, Error) {
+pub fn clone(
+  hdl: Handle,
+  name: String,
+  origin: String,
+  props: Option(NvList),
+  hidden_args: Option(NvList),
+) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocClone,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(
+      Some(name),
+      data: option.values([
+        nvlist_opt([
+          Some(nvl.String("origin", origin)),
+          option.map(props, nvl.Nvlist("props", _)),
+          option.map(hidden_args, nvl.Nvlist("hidden_args", _)),
+        ]),
+      ]),
+    ),
   )
 }
 
-pub fn bookmark(hdl: Handle, name: String, args: NvList) -> Result(Nil, Error) {
+pub fn bookmark(
+  hdl: Handle,
+  name: String,
+  bookmarks: NvList,
+) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocBookmark,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(Some(name), data: [nvs.pack(bookmarks, nvs.Native)]),
   )
 }
 
@@ -2145,15 +2207,11 @@ pub fn recv_new(
   )
 }
 
-pub fn pool_sync(
-  hdl: Handle,
-  name: String,
-  args: NvList,
-) -> Result(Nil, Error) {
+pub fn pool_sync(hdl: Handle, name: String, force: Bool) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocPoolSync,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(Some(name), data: [nvlist([nvl.BooleanValue("force", force)])]),
   )
 }
 
@@ -2173,11 +2231,24 @@ pub fn channel_program(
   )
 }
 
-pub fn load_key(hdl: Handle, name: String, args: NvList) -> Result(Nil, Error) {
+pub fn load_key(
+  hdl: Handle,
+  name: String,
+  hidden_args: NvList,
+  noop: Bool,
+) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocLoadKey,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(
+      Some(name),
+      data: option.values([
+        nvlist_opt([
+          Some(nvl.Nvlist("hidden_args", hidden_args)),
+          opt(noop, nvl.Boolean("noop")),
+        ]),
+      ]),
+    ),
   )
 }
 
@@ -2188,12 +2259,23 @@ pub fn unload_key(hdl: Handle, name: String) -> Result(Nil, Error) {
 pub fn change_key(
   hdl: Handle,
   name: String,
-  args: NvList,
+  crypt_cmd: Option(Int),
+  hidden_args: Option(NvList),
+  props: Option(NvList),
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocChangeKey,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(
+      Some(name),
+      data: option.values([
+        nvlist_opt([
+          option.map(crypt_cmd, nvl.Uint64("crypt_cmd", _)),
+          option.map(hidden_args, nvl.Nvlist("hidden_args", _)),
+          option.map(props, nvl.Nvlist("props", _)),
+        ]),
+      ]),
+    ),
   )
 }
 
@@ -2208,40 +2290,93 @@ pub fn pool_discard_checkpoint(
   ioctl_unit(hdl, ZfsIocPoolDiscardCheckpoint, ZfsCmdReq(Some(name), []))
 }
 
+pub type PoolInitializeFunc {
+  PoolInitializeStart
+  PoolInitializeCancel
+  PoolInitializeSuspend
+  PoolInitializeUninit
+}
+
+fn pool_initialize_func_index(func: PoolInitializeFunc) -> Int {
+  case func {
+    PoolInitializeStart -> 0
+    PoolInitializeCancel -> 1
+    PoolInitializeSuspend -> 2
+    PoolInitializeUninit -> 3
+  }
+}
+
 pub fn pool_initialize(
   hdl: Handle,
   name: String,
-  args: NvList,
+  command: PoolInitializeFunc,
+  vdevs: NvList,
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocPoolInitialize,
     ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
+      nvlist([
+        nvl.Uint64("initialize_command", pool_initialize_func_index(command)),
+        nvl.Nvlist("initialize_vdevs", vdevs),
+      ]),
     ]),
   )
+}
+
+pub type PoolTrimFunc {
+  PoolTrimStart
+  PoolTrimCancel
+  PoolTrimSuspend
+}
+
+fn pool_trim_func_index(func: PoolTrimFunc) -> Int {
+  case func {
+    PoolTrimStart -> 0
+    PoolTrimCancel -> 1
+    PoolTrimSuspend -> 2
+  }
 }
 
 pub fn pool_trim(
   hdl: Handle,
   name: String,
-  args: NvList,
+  command: PoolTrimFunc,
+  vdevs: NvList,
+  rate: Option(Int),
+  secure: Option(Bool),
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocPoolTrim,
-    ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
-    ]),
+    ZfsCmdReq(
+      Some(name),
+      data: option.values([
+        nvlist_opt([
+          Some(nvl.Uint64("trim_command", pool_trim_func_index(command))),
+          Some(nvl.Nvlist("trim_vdevs", vdevs)),
+          option.map(rate, nvl.Uint64("trim_rate", _)),
+          option.map(secure, nvl.BooleanValue("trim_secure", _)),
+        ]),
+      ]),
+    ),
   )
 }
 
-pub fn redact(hdl: Handle, name: String, args: NvList) -> Result(Nil, Error) {
+pub fn redact(
+  hdl: Handle,
+  name: String,
+  bookname: String,
+  snaps: NvList,
+) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocRedact,
     ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
+      nvlist([
+        nvl.String("bookname", bookname),
+        nvl.Nvlist("snapnv", snaps),
+      ]),
     ]),
   )
 }
@@ -2250,26 +2385,73 @@ pub fn get_bookmark_props(hdl: Handle, name: String) -> Result(NvList, Error) {
   ioctl_nvlist(hdl, ZfsIocGetBookmarkProps, ZfsCmdReq(Some(name), []))
 }
 
-pub fn wait(hdl: Handle, name: String, args: NvList) -> Result(NvList, Error) {
+pub type ZpoolWaitActivity {
+  ZpoolWaitCkptDiscard
+  ZpoolWaitFree
+  ZpoolWaitInitialize
+  ZpoolWaitReplace
+  ZpoolWaitRemove
+  ZpoolWaitResilver
+  ZpoolWaitScrub
+  ZpoolWaitTrim
+  ZpoolWaitRaidzExpand
+}
+
+fn zpool_wait_activity_index(act: ZpoolWaitActivity) -> Int {
+  case act {
+    ZpoolWaitCkptDiscard -> 0
+    ZpoolWaitFree -> 1
+    ZpoolWaitInitialize -> 2
+    ZpoolWaitReplace -> 3
+    ZpoolWaitRemove -> 4
+    ZpoolWaitResilver -> 5
+    ZpoolWaitScrub -> 6
+    ZpoolWaitTrim -> 7
+    ZpoolWaitRaidzExpand -> 8
+  }
+}
+
+pub fn wait(
+  hdl: Handle,
+  name: String,
+  activity: ZpoolWaitActivity,
+  tag: Option(Int),
+) -> Result(NvList, Error) {
   ioctl_nvlist(
     hdl,
     ZfsIocWait,
-    ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
-    ]),
+    ZfsCmdReq(
+      Some(name),
+      data: option.values([
+        nvlist_opt([
+          Some(nvl.Int32("wait_activity", zpool_wait_activity_index(activity))),
+          option.map(tag, nvl.Uint64("wait_tag", _)),
+        ]),
+      ]),
+    ),
   )
+}
+
+pub type ZfsWaitActivity {
+  ZfsWaitDeleteQ
+}
+
+fn zfs_wait_activity_index(act: ZfsWaitActivity) -> Int {
+  case act {
+    ZfsWaitDeleteQ -> 0
+  }
 }
 
 pub fn wait_fs(
   hdl: Handle,
   name: String,
-  args: NvList,
+  activity: ZfsWaitActivity,
 ) -> Result(NvList, Error) {
   ioctl_nvlist(
     hdl,
     ZfsIocWaitFs,
     ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
+      nvlist([nvl.Int32("wait_activity", zfs_wait_activity_index(activity))]),
     ]),
   )
 }
@@ -2277,27 +2459,38 @@ pub fn wait_fs(
 pub fn vdev_get_props(
   hdl: Handle,
   name: String,
-  args: NvList,
+  vdev: Int,
+  props: Option(NvList),
 ) -> Result(NvList, Error) {
   ioctl_nvlist(
     hdl,
     ZfsIocVdevGetProps,
-    ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
-    ]),
+    ZfsCmdReq(
+      Some(name),
+      data: option.values([
+        nvlist_opt([
+          Some(nvl.Uint64("vdevprops_get_vdev", vdev)),
+          option.map(props, nvl.Nvlist("vdevprops_get_props", _)),
+        ]),
+      ]),
+    ),
   )
 }
 
 pub fn vdev_set_props(
   hdl: Handle,
   name: String,
-  args: NvList,
+  vdev: Int,
+  props: NvList,
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocVdevSetProps,
     ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
+      nvlist([
+        nvl.Uint64("vdevprops_set_vdev", vdev),
+        nvl.Nvlist("vdevprops_set_props", props),
+      ]),
     ]),
   )
 }
@@ -2305,51 +2498,103 @@ pub fn vdev_set_props(
 pub fn pool_scrub(
   hdl: Handle,
   name: String,
-  args: NvList,
+  scan_type: PoolScanFunc,
+  scan_command: PoolScrubCmd,
+  date_start: Option(Int),
+  date_end: Option(Int),
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocPoolScrub,
-    ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
-    ]),
+    ZfsCmdReq(
+      Some(name),
+      data: option.values([
+        nvlist_opt([
+          Some(nvl.Uint64("scan_type", scan_func_index(scan_type))),
+          Some(nvl.Uint64("scrub_command", scrub_cmd_index(scan_command))),
+          option.map(date_start, nvl.Uint64("scrub_date_start", _)),
+          option.map(date_end, nvl.Uint64("scrub_date_end", _)),
+        ]),
+      ]),
+    ),
   )
+}
+
+pub type ZpoolPrefetchType {
+  ZpoolPrefetchNone
+  ZpoolPrefetchDdt
+  ZpoolPrefetchBrt
+}
+
+fn zpool_prefetch_type_index(prefetch: ZpoolPrefetchType) -> Int {
+  case prefetch {
+    ZpoolPrefetchNone -> 0
+    ZpoolPrefetchDdt -> 1
+    ZpoolPrefetchBrt -> 2
+  }
 }
 
 pub fn pool_prefetch(
   hdl: Handle,
   name: String,
-  args: NvList,
+  prefetch: ZpoolPrefetchType,
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocPoolPrefetch,
     ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
+      nvlist([nvl.Int32("prefetch_type", zpool_prefetch_type_index(prefetch))]),
     ]),
   )
+}
+
+pub type ZpoolDdtPruneUnit {
+  ZpoolDdtPruneNone
+  ZpoolDdtPruneAge
+  ZpoolDdtPrunePercentage
+}
+
+fn zpool_ddt_prune_unit_index(unit: ZpoolDdtPruneUnit) -> Int {
+  case unit {
+    ZpoolDdtPruneNone -> 0
+    ZpoolDdtPruneAge -> 1
+    ZpoolDdtPrunePercentage -> 2
+  }
 }
 
 pub fn ddt_prune(
   hdl: Handle,
   name: String,
-  args: NvList,
+  unit: ZpoolDdtPruneUnit,
+  amount: Int,
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocDdtPrune,
     ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
+      nvlist([
+        nvl.Int32("ddt_prune_unit", zpool_ddt_prune_unit_index(unit)),
+        nvl.Uint64("ddt_prune_amount", amount),
+      ]),
     ]),
   )
 }
 
-pub fn nextboot(hdl: Handle, args: NvList) -> Result(Nil, Error) {
+pub fn nextboot(
+  hdl: Handle,
+  command: String,
+  pool_guid: Int,
+  guid: Int,
+) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocNextboot,
     ZfsCmdReq(None, data: [
-      nvs.pack(args, nvs.Native),
+      nvlist([
+        nvl.String("command", command),
+        nvl.Uint64("pool_guid", pool_guid),
+        nvl.Uint64("guid", guid),
+      ]),
     ]),
   )
 }
@@ -2374,15 +2619,29 @@ pub fn unjail(hdl: Handle, name: String, jid: Int) -> Result(Nil, Error) {
   )
 }
 
+pub type BootenvConfig {
+  Raw(String)
+  Nvlist(NvList)
+}
+
 pub fn set_bootenv(
   hdl: Handle,
   name: String,
-  args: NvList,
+  config: BootenvConfig,
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocSetBootenv,
-    ZfsCmdReq(Some(name), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(Some(name), data: [
+      case config {
+        Raw(grub_envmap) ->
+          nvlist([
+            nvl.Uint64("version", 0),
+            nvl.String("grub:envmap", grub_envmap),
+          ])
+        Nvlist(cfg) -> nvs.pack(cfg, nvs.Native)
+      },
+    ]),
   )
 }
 
