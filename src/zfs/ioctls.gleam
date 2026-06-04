@@ -910,14 +910,14 @@ pub fn objset_stats(
       nvlist([nvl.Uint8("simple", int(simple))]),
     ])
   case ioctl(hdl, ZfsIocObjsetStats, req) {
-    ZfsCmdRes(error: 0, msg: None, data: [packed_results, packed_config]) -> {
+    ZfsCmdRes(error: 0, msg: None, data: [packed_results, packed_props]) -> {
       assert !simple
       let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Ok(#(config, <<>>)) = nvs.unpack(packed_config)
+      let assert Ok(#(props, <<>>)) = nvs.unpack(packed_props)
       let assert Some(nvl.ByteArray("objset_stats", stats_bin)) =
         nvl.lookup(results, "objset_stats")
       let assert Some(objset_stats) = bin_objset_stats(stats_bin)
-      Ok(#(objset_stats, Some(config)))
+      Ok(#(objset_stats, Some(props)))
     }
     ZfsCmdRes(error: 0, msg: None, data: [packed_results]) -> {
       assert simple
