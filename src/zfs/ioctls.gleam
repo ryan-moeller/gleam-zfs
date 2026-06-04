@@ -1325,6 +1325,94 @@ fn index_object_type(index: Int) -> Option(DmuObjectType) {
   }
 }
 
+pub type InjectIotype {
+  IotypeNull
+  IotypeRead
+  IotypeWrite
+  IotypeFree
+  IotypeClaim
+  IotypeFlush
+  IotypeTrim
+  IotypeAll
+  IotypeProbe
+}
+
+fn inject_iotype_index(iotype: InjectIotype) -> Int {
+  case iotype {
+    IotypeNull -> 0
+    IotypeRead -> 1
+    IotypeWrite -> 2
+    IotypeFree -> 3
+    IotypeClaim -> 4
+    IotypeFlush -> 5
+    IotypeTrim -> 6
+    IotypeAll -> 7
+    IotypeProbe -> 16
+  }
+}
+
+fn index_inject_iotype(index: Int) -> Option(InjectIotype) {
+  case index {
+    0 -> Some(IotypeNull)
+    1 -> Some(IotypeRead)
+    2 -> Some(IotypeWrite)
+    3 -> Some(IotypeFree)
+    4 -> Some(IotypeClaim)
+    5 -> Some(IotypeFlush)
+    6 -> Some(IotypeTrim)
+    7 -> Some(IotypeAll)
+    16 -> Some(IotypeProbe)
+    _ -> None
+  }
+}
+
+pub type InjectType {
+  InjectUninitialized
+  InjectDataFault
+  InjectDeviceFault
+  InjectLabelFault
+  InjectIgnoredWrites
+  InjectPanic
+  InjectDelayIo
+  InjectDecryptFault
+  InjectDelayImport
+  InjectDelayExport
+  InjectDelayReady
+}
+
+fn inject_type_index(it: InjectType) -> Int {
+  case it {
+    InjectUninitialized -> 0
+    InjectDataFault -> 1
+    InjectDeviceFault -> 2
+    InjectLabelFault -> 3
+    InjectIgnoredWrites -> 4
+    InjectPanic -> 5
+    InjectDelayIo -> 6
+    InjectDecryptFault -> 7
+    InjectDelayImport -> 8
+    InjectDelayExport -> 9
+    InjectDelayReady -> 10
+  }
+}
+
+fn index_inject_type(index: Int) -> Option(InjectType) {
+  case index {
+    0 -> Some(InjectUninitialized)
+    1 -> Some(InjectDataFault)
+    2 -> Some(InjectDeviceFault)
+    3 -> Some(InjectLabelFault)
+    4 -> Some(InjectIgnoredWrites)
+    5 -> Some(InjectPanic)
+    6 -> Some(InjectDelayIo)
+    7 -> Some(InjectDecryptFault)
+    8 -> Some(InjectDelayImport)
+    9 -> Some(InjectDelayExport)
+    10 -> Some(InjectDelayReady)
+    _ -> None
+  }
+}
+
 pub type InjectRecord {
   InjectRecord(
     objset: Int,
@@ -1338,11 +1426,11 @@ pub type InjectRecord {
     freq: Int,
     failfast: Int,
     func: String,
-    iotype: Int,
+    iotype: InjectIotype,
     duration: Int,
     timer: Int,
     nlanes: Int,
-    cmd: Int,
+    cmd: InjectType,
     dvas: Int,
     match_count: Int,
     inject_count: Int,
@@ -1365,16 +1453,18 @@ fn bin_inject_record(bin: BitArray) -> Option(InjectRecord) {
       freq:native-unsigned-size(32),
       failfast:native-unsigned-size(32),
       func_raw:bytes-size(maxnamelen),
-      iotype:native-unsigned-size(32),
+      iotype_index:native-unsigned-size(32),
       duration:native-size(32),
       timer:native-unsigned-size(64),
       nlanes:native-unsigned-size(64),
-      cmd:native-unsigned-size(32),
+      cmd_index:native-unsigned-size(32),
       dvas:native-unsigned-size(32),
       match_count:native-unsigned-size(64),
       inject_count:native-unsigned-size(64),
     >> -> {
       let assert Some(object_type) = index_object_type(object_type_index)
+      let assert Some(iotype) = index_inject_iotype(iotype_index)
+      let assert Some(cmd) = index_inject_type(cmd_index)
       let assert Ok(func) = bit_array.to_string(func_raw)
       Some(InjectRecord(
         objset,
@@ -1417,11 +1507,11 @@ fn inject_record_bin(record: InjectRecord) -> BitArray {
     record.failfast:native-size(32),
     record.func:utf8,
     0:unit(8)-size(pad_len),
-    record.iotype:native-size(32),
+    inject_iotype_index(record.iotype):native-size(32),
     record.duration:native-size(32),
     record.timer:native-size(64),
     record.nlanes:native-size(64),
-    record.cmd:native-size(32),
+    inject_type_index(record.cmd):native-size(32),
     record.dvas:native-size(32),
     record.match_count:native-size(64),
     record.inject_count:native-size(64),
