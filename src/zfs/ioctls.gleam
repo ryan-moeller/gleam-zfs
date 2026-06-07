@@ -1658,10 +1658,11 @@ pub fn error_log(
 pub fn clear(
   hdl: Handle,
   name: String,
-  guid: Int,
+  guid: Option(Int),
   rewind_policy: Option(NvList),
 ) -> Result(Option(NvList), Error) {
-  let params = nvlist([nvl.Uint64("guid", guid)])
+  // XXX: Always send a params nvlist to avoid ambiguity.
+  let params = nvlist([nvl.Uint64("guid", option.unwrap(guid, 0))])
   case rewind_policy {
     Some(policy) -> {
       use config <- result.try(ioctl_nvlist(
