@@ -330,10 +330,8 @@ fn common_objset_id_lookup(name: String) -> Int {
 }
 
 fn common_inject_fault(vdevs: List(String)) -> Int {
+  let guid = common_vdev_guid(vdevs)
   let enxio = 6
-  let assert Ok(vdev) = list.first(vdevs)
-  let label = vdev_label_read(vdev)
-  let assert Some(nvl.Uint64(_, guid)) = nvl.lookup(label, "guid")
   let record =
     ioctls.InjectRecord(
       objset: 0,
