@@ -2628,9 +2628,9 @@ pub fn pool_scrub(
       data: option.values([
         nvlist_opt([
           Some(nvl.Uint64("scan_type", scan_func_index(scan_type))),
-          Some(nvl.Uint64("scrub_command", scrub_cmd_index(scan_command))),
-          option.map(date_start, nvl.Uint64("scrub_date_start", _)),
-          option.map(date_end, nvl.Uint64("scrub_date_end", _)),
+          Some(nvl.Uint64("scan_command", scrub_cmd_index(scan_command))),
+          option.map(date_start, nvl.Uint64("scan_date_start", _)),
+          option.map(date_end, nvl.Uint64("scan_date_end", _)),
         ]),
       ]),
     ),
