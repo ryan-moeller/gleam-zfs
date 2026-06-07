@@ -21,11 +21,11 @@
 #define ZFS_DRV "zfs_drv"
 #define ZFS_IOCVER_OZFS	15
 
-typedef struct zfs_iocparam {
+typedef struct zfs_iocparm {
 	uint32_t zfs_ioctl_version;
 	uint64_t zfs_cmd;
 	uint64_t zfs_cmd_size;
-} zfs_iocparam_t;
+} zfs_iocparm_t;
 
 /*
  * Per-instance state structure.
@@ -158,14 +158,14 @@ zfs_stop(ErlDrvData handle)
 static int
 zfs_ioctl(ZfsState *zfs, unsigned long request, zfs_cmd_t *zc)
 {
-	zfs_iocparam_t zp;
+	zfs_iocparm_t zp;
 	size_t oldsize;
 
 	oldsize = zc->zc_nvlist_dst_size;
 	zp.zfs_cmd = (uint64_t)(uintptr_t)zc;
 	zp.zfs_cmd_size = sizeof (zfs_cmd_t);
 	zp.zfs_ioctl_version = ZFS_IOCVER_OZFS;
-	if (ioctl(zfs->fd, _IOWR('Z', request, zfs_iocparam_t), &zp) != 0)
+	if (ioctl(zfs->fd, _IOWR('Z', request, zfs_iocparm_t), &zp) != 0)
 		return errno;
 	if (oldsize < zc->zc_nvlist_dst_size)
 		return ENOMEM;
@@ -227,7 +227,7 @@ zfs_call(ErlDrvData handle, unsigned int command, char *buf, ErlDrvSizeT len,
 	if (ei_get_type(buf, &index, &type, &size) == -1)
 		return zfs_fatal(rbuf, rlen);
 
-	char name[ZFS_MAX_DATASET_NAME_LEN];
+	char name[sizeof zc.zc_name];
 	long namelen;
 	switch (type) {
 	case ERL_ATOM_EXT:
@@ -254,6 +254,7 @@ zfs_call(ErlDrvData handle, unsigned int command, char *buf, ErlDrvSizeT len,
 	}
 	assert(namelen >= 0);
 	name[namelen] = '\0';
+	(void) strcpy(zc.zc_name, name);
 
 	if (ei_decode_list_header(buf, &index, &arity) == -1 || arity < 0)
 		return zfs_fatal(rbuf, rlen);
@@ -267,12 +268,12 @@ zfs_call(ErlDrvData handle, unsigned int command, char *buf, ErlDrvSizeT len,
 	res = zfs_unit(rbuf, rlen, 0, NULL); \
 })
 #define zfs_error(error, fmt, ...) ({ \
-	res = zfs_unit(rbuf, rlen, error, fmt, __VA_ARGS__); \
+	res = zfs_unit(rbuf, rlen, (error), fmt, __VA_ARGS__); \
 })
 
 #define CHECK(expr, error, container) ({ \
 	if (!(expr)) { \
-		zfs_error(error, "%s: invalid " #container, ZFS_DRV); \
+		zfs_error((error), "%s: invalid " #container, ZFS_DRV); \
 		break; \
 	} \
 })
@@ -340,7 +341,7 @@ zfs_call(ErlDrvData handle, unsigned int command, char *buf, ErlDrvSizeT len,
 	ErlDrvBinary *result = NULL;
 
 #define RESULT(size) ({ \
-	result = driver_realloc_binary(result, size); \
+	result = driver_realloc_binary(result, (size)); \
 	assert(result != NULL); /* XXX */ \
 	zc.zc_nvlist_dst_size = result->orig_size; \
 	zc.zc_nvlist_dst = (uint64_t)(uintptr_t)&result->orig_bytes[0]; \
@@ -350,8 +351,9 @@ zfs_call(ErlDrvData handle, unsigned int command, char *buf, ErlDrvSizeT len,
 	ei_x_buff x; \
 	ei_x_new_with_version(&x); \
 	encode_ok_header(&x); \
-	encode_zfs_cmd_res_headerv(&x, error, NULL, NULL); \
+	encode_zfs_cmd_res_headerv(&x, (error), NULL, NULL); \
 	ei_x_encode_list_header(&x, 1); \
+	assert(zc.zc_nvlist_dst_filled); \
 	assert(zc.zc_nvlist_dst_size <= result->orig_size); \
 	ei_x_encode_binary(&x, result->orig_bytes, zc.zc_nvlist_dst_size); \
 	driver_free_binary(result); \
@@ -363,7 +365,7 @@ zfs_call(ErlDrvData handle, unsigned int command, char *buf, ErlDrvSizeT len,
 	ei_x_buff x; \
 	ei_x_new_with_version(&x); \
 	encode_ok_header(&x); \
-	encode_zfs_cmd_res_headerv(&x, error, NULL, NULL); \
+	encode_zfs_cmd_res_headerv(&x, (error), NULL, NULL); \
 	ei_x_encode_list_header(&x, 1); \
 	size_t size; \
 	char *p = fnvlist_pack(results, &size); \
@@ -880,17 +882,17 @@ zfs_call(ErlDrvData handle, unsigned int command, char *buf, ErlDrvSizeT len,
 			ei_x_new_with_version(&x);
 			encode_ok_header(&x);
 			encode_zfs_cmd_res_headerv(&x, error, NULL, NULL);
+			ei_x_encode_list_header(&x, 1);
 
 			/*
 			 * This ioctl fills the buffer from the back and returns
 			 * with the remaining leading space in nvlist_dst_size.
 			 */
-			size_t pad = zc.zc_nvlist_dst_size;
-			count = pad / sizeof (zbookmark_phys_t);
-			ei_x_encode_list_header(&x, count);
-			for (zbookmark_phys_t *p = (void *)zc.zc_nvlist_dst;
-			    count > 0; count--, p++)
-				ei_x_encode_binary(&x, p, sizeof *p);
+			size_t pad =
+			    zc.zc_nvlist_dst_size * sizeof (zbookmark_phys_t);
+			char *p = result->orig_bytes + pad;
+			size_t len = result->orig_size - pad;
+			ei_x_encode_binary(&x, p, len);
 			driver_free_binary(result);
 
 			ei_x_encode_empty_list(&x);
