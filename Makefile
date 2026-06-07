@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 CC	=	cc
-CFLAGS	=	-O2 -Wall -fPIC -pthread -std=c23
+#CFLAGS	=	-O2 -Wall -fPIC -pthread -std=c23
+CFLAGS	=	-O0 -g -Wall -Werror -fPIC -pthread -std=c23
 LDFLAGS	=	-Bmold -shared -lnvpair
 
 SRCTOP	:=	/usr/src
