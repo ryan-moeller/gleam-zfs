@@ -114,7 +114,7 @@ type ZfsIoc {
   ZfsIocClear
   ZfsIocPromote
   ZfsIocSnapshot
-  ZfsIocDsobjToDsname
+  ZfsIocDsObjToDsName
   ZfsIocObjToPath
   ZfsIocPoolSetProps
   ZfsIocPoolGetProps
@@ -123,9 +123,9 @@ type ZfsIoc {
   ZfsIocShare
   ZfsIocInheritProp
   ZfsIocSmbAcl
-  ZfsIocUserspaceOne
-  ZfsIocUserspaceMany
-  ZfsIocUserspaceUpgrade
+  ZfsIocUserSpaceOne
+  ZfsIocUserSpaceMany
+  ZfsIocUserSpaceUpgrade
   ZfsIocHold
   ZfsIocRelease
   ZfsIocGetHolds
@@ -172,11 +172,11 @@ type ZfsIoc {
   ZfsIocEventsNext
   ZfsIocEventsClear
   ZfsIocEventsSeek
-  ZfsIocNextboot
+  ZfsIocNextBoot
   ZfsIocJail
   ZfsIocUnjail
-  ZfsIocSetBootenv
-  ZfsIocGetBootenv
+  ZfsIocSetBootEnv
+  ZfsIocGetBootEnv
 }
 
 fn zfsioc_index(ioc: ZfsIoc) -> Int {
@@ -217,7 +217,7 @@ fn zfsioc_index(ioc: ZfsIoc) -> Int {
     ZfsIocClear -> 33
     ZfsIocPromote -> 34
     ZfsIocSnapshot -> 35
-    ZfsIocDsobjToDsname -> 36
+    ZfsIocDsObjToDsName -> 36
     ZfsIocObjToPath -> 37
     ZfsIocPoolSetProps -> 38
     ZfsIocPoolGetProps -> 39
@@ -226,9 +226,9 @@ fn zfsioc_index(ioc: ZfsIoc) -> Int {
     ZfsIocShare -> 42
     ZfsIocInheritProp -> 43
     ZfsIocSmbAcl -> 44
-    ZfsIocUserspaceOne -> 45
-    ZfsIocUserspaceMany -> 46
-    ZfsIocUserspaceUpgrade -> 47
+    ZfsIocUserSpaceOne -> 45
+    ZfsIocUserSpaceMany -> 46
+    ZfsIocUserSpaceUpgrade -> 47
     ZfsIocHold -> 48
     ZfsIocRelease -> 49
     ZfsIocGetHolds -> 50
@@ -275,11 +275,11 @@ fn zfsioc_index(ioc: ZfsIoc) -> Int {
     ZfsIocEventsNext -> 129
     ZfsIocEventsClear -> 130
     ZfsIocEventsSeek -> 131
-    ZfsIocNextboot -> 132
+    ZfsIocNextBoot -> 132
     ZfsIocJail -> 133
     ZfsIocUnjail -> 134
-    ZfsIocSetBootenv -> 135
-    ZfsIocGetBootenv -> 136
+    ZfsIocSetBootEnv -> 135
+    ZfsIocGetBootEnv -> 136
   }
 }
 
@@ -1707,14 +1707,14 @@ pub fn snapshot(
   )
 }
 
-pub fn dsobj_to_dsname(
+pub fn ds_obj_to_ds_name(
   hdl: Handle,
   name: String,
   dsobj: Int,
 ) -> Result(String, Error) {
   use results <- result.try(ioctl_nvlist(
     hdl,
-    ZfsIocDsobjToDsname,
+    ZfsIocDsObjToDsName,
     ZfsCmdReq(Some(name), data: [
       nvlist([nvl.Uint64("obj", dsobj)]),
     ]),
@@ -1798,7 +1798,7 @@ pub fn inherit_prop(
   )
 }
 
-pub type UserquotaProp {
+pub type UserQuotaProp {
   UserUsed
   UserQuota
   GroupUsed
@@ -1813,7 +1813,7 @@ pub type UserquotaProp {
   ProjectObjQuota
 }
 
-fn userquota_prop_index(prop: UserquotaProp) -> Int {
+fn user_quota_prop_index(prop: UserQuotaProp) -> Int {
   case prop {
     UserUsed -> 0
     UserQuota -> 1
@@ -1830,33 +1830,33 @@ fn userquota_prop_index(prop: UserquotaProp) -> Int {
   }
 }
 
-pub fn userspace_one(
+pub fn user_space_one(
   hdl: Handle,
   name: String,
-  prop: UserquotaProp,
+  prop: UserQuotaProp,
   domain: String,
   id: Int,
 ) -> Result(Int, Error) {
   use results <- result.try(ioctl_nvlist(
     hdl,
-    ZfsIocUserspaceOne,
+    ZfsIocUserSpaceOne,
     ZfsCmdReq(Some(name), data: [
       nvlist([
-        nvl.Uint64("objset_type", userquota_prop_index(prop)),
+        nvl.Uint64("objset_type", user_quota_prop_index(prop)),
         nvl.Uint64("guid", id),
         nvl.String("value", domain),
       ]),
     ]),
   ))
-  let assert Some(nvl.Uint64("cookie", space)) = nvl.lookup(results, "cookie")
+  let assert Some(nvl.Uint64(_, space)) = nvl.lookup(results, "cookie")
   Ok(space)
 }
 
-pub type Useracct {
-  Useracct(domain: String, rid: Int, space: Int)
+pub type UserAcct {
+  UserAcct(domain: String, rid: Int, space: Int)
 }
 
-fn bin_useracct(bin: BitArray) -> Option(Useracct) {
+fn bin_user_acct(bin: BitArray) -> Option(UserAcct) {
   case bin {
     <<
       domain_raw:bytes-size(256),
@@ -1865,7 +1865,7 @@ fn bin_useracct(bin: BitArray) -> Option(Useracct) {
       space:native-unsigned-size(64),
     >> -> {
       let assert Ok(domain) = str(domain_raw)
-      Some(Useracct(domain, rid, space))
+      Some(UserAcct(domain, rid, space))
     }
     _ -> None
   }
@@ -1873,54 +1873,53 @@ fn bin_useracct(bin: BitArray) -> Option(Useracct) {
 
 const sizeof_zfs_useracct_t = 272
 
-fn bin_useraccts_impl(
-  acc: List(Useracct),
+fn bin_user_accts_impl(
+  acc: List(UserAcct),
   n: Int,
   bin: BitArray,
-) -> Option(List(Useracct)) {
+) -> Option(List(UserAcct)) {
   case n, bin {
     0, <<>> -> Some(acc)
-    _, <<useracct_bin:bytes-size(sizeof_zfs_useracct_t), rest:bytes>> -> {
-      use useracct <- option.then(bin_useracct(useracct_bin))
-      bin_useraccts_impl([useracct, ..acc], n - 1, rest)
+    _, <<user_acct_bin:bytes-size(sizeof_zfs_useracct_t), rest:bytes>> -> {
+      use user_acct <- option.then(bin_user_acct(user_acct_bin))
+      bin_user_accts_impl([user_acct, ..acc], n - 1, rest)
     }
     _, _ -> None
   }
 }
 
-fn bin_useraccts(bin: BitArray) -> Option(List(Useracct)) {
-  bin_useraccts_impl([], bit_array.byte_size(bin) / sizeof_zfs_useracct_t, bin)
+fn bin_user_accts(bin: BitArray) -> Option(List(UserAcct)) {
+  bin_user_accts_impl([], bit_array.byte_size(bin) / sizeof_zfs_useracct_t, bin)
 }
 
-pub fn userspace_many(
+pub fn user_space_many(
   hdl: Handle,
   name: String,
-  prop: UserquotaProp,
+  prop: UserQuotaProp,
   count: Int,
   cursor: Int,
-) -> Result(#(Int, List(Useracct)), Error) {
+) -> Result(#(Int, List(UserAcct)), Error) {
   let req =
     ZfsCmdReq(Some(name), data: [
       nvlist([
         nvl.Uint64("cookie", cursor),
-        nvl.Uint64("objset_type", userquota_prop_index(prop)),
+        nvl.Uint64("objset_type", user_quota_prop_index(prop)),
         nvl.Uint64("nvlist_dst_size", count * sizeof_zfs_useracct_t),
       ]),
     ])
-  case ioctl(hdl, ZfsIocUserspaceMany, req) {
-    ZfsCmdRes(error: 0, msg: None, data: [packed_results, useraccts_bin]) -> {
+  case ioctl(hdl, ZfsIocUserSpaceMany, req) {
+    ZfsCmdRes(error: 0, msg: None, data: [packed_results, user_accts_bin]) -> {
       let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Some(nvl.Uint64("cursor", cursor)) =
-        nvl.lookup(results, "cursor")
-      let assert Some(useraccts) = bin_useraccts(useraccts_bin)
-      Ok(#(cursor, useraccts))
+      let assert Some(nvl.Uint64(_, cursor)) = nvl.lookup(results, "cookie")
+      let assert Some(user_accts) = bin_user_accts(user_accts_bin)
+      Ok(#(cursor, user_accts))
     }
     res -> Error(error(res))
   }
 }
 
-pub fn userspace_upgrade(hdl: Handle, name: String) -> Result(Nil, Error) {
-  ioctl_unit(hdl, ZfsIocUserspaceUpgrade, ZfsCmdReq(Some(name), []))
+pub fn user_space_upgrade(hdl: Handle, name: String) -> Result(Nil, Error) {
+  ioctl_unit(hdl, ZfsIocUserSpaceUpgrade, ZfsCmdReq(Some(name), []))
 }
 
 pub fn hold(
@@ -2695,7 +2694,7 @@ pub fn nextboot(
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
-    ZfsIocNextboot,
+    ZfsIocNextBoot,
     ZfsCmdReq(None, data: [
       nvlist([
         nvl.String("command", command),
@@ -2726,32 +2725,32 @@ pub fn unjail(hdl: Handle, name: String, jid: Int) -> Result(Nil, Error) {
   )
 }
 
-pub type BootenvConfig {
-  Raw(String)
-  Nvlist(NvList)
+pub type BootEnvConfig {
+  BootEnvRaw(String)
+  BootEnvNvlist(NvList)
 }
 
-pub fn set_bootenv(
+pub fn set_boot_env(
   hdl: Handle,
   name: String,
-  config: BootenvConfig,
+  config: BootEnvConfig,
 ) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
-    ZfsIocSetBootenv,
+    ZfsIocSetBootEnv,
     ZfsCmdReq(Some(name), data: [
       case config {
-        Raw(grub_envmap) ->
+        BootEnvRaw(grub_envmap) ->
           nvlist([
             nvl.Uint64("version", 0),
             nvl.String("grub:envmap", grub_envmap),
           ])
-        Nvlist(cfg) -> nvs.pack(cfg, nvs.Native)
+        BootEnvNvlist(cfg) -> nvs.pack(cfg, nvs.Native)
       },
     ]),
   )
 }
 
-pub fn get_bootenv(hdl: Handle, name: String) -> Result(NvList, Error) {
-  ioctl_nvlist(hdl, ZfsIocGetBootenv, ZfsCmdReq(Some(name), []))
+pub fn get_boot_env(hdl: Handle, name: String) -> Result(NvList, Error) {
+  ioctl_nvlist(hdl, ZfsIocGetBootEnv, ZfsCmdReq(Some(name), []))
 }
