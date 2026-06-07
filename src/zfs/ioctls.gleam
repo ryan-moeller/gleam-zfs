@@ -371,11 +371,10 @@ fn ioctl_stats_list_next(
         }
         _ -> Error(InternalError)
       })
-      let assert Some(nvl.String("name", next_name)) =
-        nvl.lookup(results, "name")
-      let assert Some(nvl.Uint64("cookie", next_cookie)) =
+      let assert Some(nvl.String(_, next_name)) = nvl.lookup(results, "name")
+      let assert Some(nvl.Uint64(_, next_cookie)) =
         nvl.lookup(results, "cookie")
-      let assert Some(nvl.ByteArray("objset_stats", objset_stats_bin)) =
+      let assert Some(nvl.ByteArray(_, objset_stats_bin)) =
         nvl.lookup(results, "objset_stats")
       let assert Some(objset_stats) = bin_objset_stats(objset_stats_bin)
       Ok(Some(#(next_name, next_cookie, objset_stats, config)))
@@ -765,8 +764,7 @@ pub fn vdev_set_state(
       ]),
     ),
   ))
-  let assert Some(nvl.Uint64("cookie", newstate)) =
-    nvl.lookup(results, "cookie")
+  let assert Some(nvl.Uint64(_, newstate)) = nvl.lookup(results, "cookie")
   let assert Some(newstate) = index_vdev_state(newstate)
   Ok(newstate)
 }
@@ -936,7 +934,7 @@ pub fn objset_stats(
       assert !simple
       let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
       let assert Ok(#(props, <<>>)) = nvs.unpack(packed_props)
-      let assert Some(nvl.ByteArray("objset_stats", stats_bin)) =
+      let assert Some(nvl.ByteArray(_, stats_bin)) =
         nvl.lookup(results, "objset_stats")
       let assert Some(objset_stats) = bin_objset_stats(stats_bin)
       Ok(#(objset_stats, Some(props)))
@@ -944,7 +942,7 @@ pub fn objset_stats(
     ZfsCmdRes(error: 0, msg: None, data: [packed_results]) -> {
       assert simple
       let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Some(nvl.ByteArray("objset_stats", stats_bin)) =
+      let assert Some(nvl.ByteArray(_, stats_bin)) =
         nvl.lookup(results, "objset_stats")
       let assert Some(objset_stats) = bin_objset_stats(stats_bin)
       Ok(#(objset_stats, None))
@@ -1058,7 +1056,7 @@ pub fn rollback(
       ]),
     ),
   ))
-  let assert Some(nvl.String("target", target)) = nvl.lookup(results, "target")
+  let assert Some(nvl.String(_, target)) = nvl.lookup(results, "target")
   Ok(target)
 }
 
@@ -1572,7 +1570,7 @@ pub fn inject_fault(
       ]),
     ])
   use results <- result.try(ioctl_nvlist(hdl, ZfsIocInjectFault, req))
-  let assert Some(nvl.Uint64("guid", guid)) = nvl.lookup(results, "guid")
+  let assert Some(nvl.Uint64(_, guid)) = nvl.lookup(results, "guid")
   Ok(guid)
 }
 
@@ -1595,9 +1593,9 @@ pub fn inject_list_next(
   case ioctl(hdl, ZfsIocInjectListNext, req) {
     ZfsCmdRes(error: 0, msg: None, data: [packed_results]) -> {
       let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Some(nvl.Uint64("guid", guid)) = nvl.lookup(results, "guid")
-      let assert Some(nvl.String("name", name)) = nvl.lookup(results, "name")
-      let assert Some(nvl.ByteArray("inject_record", inject_record_bin)) =
+      let assert Some(nvl.Uint64(_, guid)) = nvl.lookup(results, "guid")
+      let assert Some(nvl.String(_, name)) = nvl.lookup(results, "name")
+      let assert Some(nvl.ByteArray(_, inject_record_bin)) =
         nvl.lookup(results, "inject_record")
       let assert Some(inject_record) = bin_inject_record(inject_record_bin)
       Ok(Some(#(guid, name, inject_record)))
@@ -1724,7 +1722,7 @@ pub fn ds_obj_to_ds_name(
       nvlist([nvl.Uint64("obj", dsobj)]),
     ]),
   ))
-  let assert Some(nvl.String("value", dsname)) = nvl.lookup(results, "value")
+  let assert Some(nvl.String(_, dsname)) = nvl.lookup(results, "value")
   Ok(dsname)
 }
 
@@ -1740,7 +1738,7 @@ pub fn obj_to_path(
       nvlist([nvl.Uint64("obj", obj)]),
     ]),
   ))
-  let assert Some(nvl.String("value", path)) = nvl.lookup(results, "value")
+  let assert Some(nvl.String(_, path)) = nvl.lookup(results, "value")
   Ok(path)
 }
 
@@ -2017,7 +2015,7 @@ pub fn next_obj(
     ZfsCmdRes(error: 0, msg: None, data: []) -> Ok(None)
     ZfsCmdRes(error: 0, msg: None, data: [packed_results]) -> {
       let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Some(nvl.Uint64("obj", next)) = nvl.lookup(results, "obj")
+      let assert Some(nvl.Uint64(_, next)) = nvl.lookup(results, "obj")
       Ok(Some(next))
     }
     res -> Error(error(res))
@@ -2055,7 +2053,7 @@ pub fn tmp_snapshot(
       nvlist([nvl.String("value", prefix), nvl.Int32("cleanup_fd", cleanup_fd)]),
     ]),
   ))
-  let assert Some(nvl.String("value", snapname)) = nvl.lookup(results, "value")
+  let assert Some(nvl.String(_, snapname)) = nvl.lookup(results, "value")
   Ok(snapname)
 }
 
@@ -2088,8 +2086,8 @@ pub fn obj_to_stats(
       nvlist([nvl.Uint64("obj", obj)]),
     ]),
   ))
-  let assert Some(nvl.String("value", path)) = nvl.lookup(results, "value")
-  let assert Some(nvl.ByteArray("stat", stat_bin)) = nvl.lookup(results, "stat")
+  let assert Some(nvl.String(_, path)) = nvl.lookup(results, "value")
+  let assert Some(nvl.ByteArray(_, stat_bin)) = nvl.lookup(results, "stat")
   let assert Some(stat) = bin_stat(stat_bin)
   Ok(#(path, stat))
 }
@@ -2106,10 +2104,10 @@ pub fn space_written(
       nvlist([nvl.String("value", snap)]),
     ]),
   ))
-  let assert Some(nvl.Uint64("cookie", used)) = nvl.lookup(results, "cookie")
-  let assert Some(nvl.Uint64("objset_type", compressed)) =
+  let assert Some(nvl.Uint64(_, used)) = nvl.lookup(results, "cookie")
+  let assert Some(nvl.Uint64(_, compressed)) =
     nvl.lookup(results, "objset_type")
-  let assert Some(nvl.Uint64("perm_action", uncompressed)) =
+  let assert Some(nvl.Uint64(_, uncompressed)) =
     nvl.lookup(results, "perm_action")
   Ok(#(used, compressed, uncompressed))
 }
@@ -2197,9 +2195,8 @@ pub fn send_progress(
       nvlist([nvl.Uint64("cookie", fd)]),
     ]),
   ))
-  let assert Some(nvl.Uint64("cookie", written)) = nvl.lookup(results, "cookie")
-  let assert Some(nvl.Uint64("objset_type", traversed)) =
-    nvl.lookup(results, "objset_type")
+  let assert Some(nvl.Uint64(_, written)) = nvl.lookup(results, "cookie")
+  let assert Some(nvl.Uint64(_, traversed)) = nvl.lookup(results, "objset_type")
   Ok(#(written, traversed))
 }
 
