@@ -74,6 +74,7 @@ pub type Error {
   ErrorCode(code: Int)
   ErrorMessage(code: Int, message: String)
   ErrorInfo(code: Int, info: NvList)
+  ErrorMessageWithInfo(code: Int, message: String, info: NvList)
 }
 
 type ZfsIoc {
@@ -307,12 +308,16 @@ fn ioctl(hdl: Handle, ioc: ZfsIoc, req: ZfsCmdReq) -> ZfsCmdRes {
 fn error(res: ZfsCmdRes) -> Error {
   assert res.error != 0
   case res {
+    ZfsCmdRes(error: error, msg: Some(msg), data: []) ->
+      ErrorMessage(error, msg)
     ZfsCmdRes(error: error, msg: None, data: [packed_info]) -> {
       let assert Ok(#(info, <<>>)) = nvs.unpack(packed_info)
       ErrorInfo(error, info)
     }
-    ZfsCmdRes(error: error, msg: Some(msg), data: []) ->
-      ErrorMessage(error, msg)
+    ZfsCmdRes(error: error, msg: Some(msg), data: [packed_info]) -> {
+      let assert Ok(#(info, <<>>)) = nvs.unpack(packed_info)
+      ErrorMessageWithInfo(error, msg, info)
+    }
     _ -> InternalError
   }
 }
