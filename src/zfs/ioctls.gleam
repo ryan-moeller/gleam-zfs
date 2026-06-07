@@ -325,6 +325,11 @@ fn error(res: ZfsCmdRes) -> Error {
 fn ioctl_unit(hdl: Handle, ioc: ZfsIoc, req: ZfsCmdReq) -> Result(Nil, Error) {
   case ioctl(hdl, ioc, req) {
     ZfsCmdRes(error: 0, msg: None, data: []) -> Ok(Nil)
+    ZfsCmdRes(error: 0, msg: None, data: [packed]) -> {
+      let assert Ok(#(info, <<>>)) = nvs.unpack(packed)
+      assert nvl.is_empty(info)
+      Ok(Nil)
+    }
     res -> Error(error(res))
   }
 }
