@@ -366,6 +366,40 @@ fn common_clear_fault(fault_id: Int) {
   assert ioctls.close_handle(hdl)
 }
 
+fn common_mount_dataset(dataset: String, mountpoint: String) {
+  list.each(
+    [
+      "mkdir -p " <> mountpoint,
+      "mount -t zfs " <> dataset <> " " <> mountpoint,
+    ],
+    utils.cmd,
+  )
+}
+
+fn common_create_file(path: String) {
+  let assert Ok(stream) = file_stream.open_write(path)
+  let assert Ok(Nil) = file_stream.close(stream)
+  Nil
+}
+
+fn common_file_inode(path: String) -> Int {
+  let assert Ok(stream) = file_stream.open_read(path)
+  let assert Ok(info) = file_stream.read_file_info(stream)
+  let assert Ok(Nil) = file_stream.close(stream)
+  let assert Some(inode) = info.inode
+  inode
+}
+
+fn common_unmount_dataset(mountpoint: String) {
+  list.each(
+    [
+      "umount -f " <> mountpoint,
+      "rmdir " <> mountpoint,
+    ],
+    utils.cmd,
+  )
+}
+
 // pool_create
 // pool_destroy
 pub fn pool_create_destroy_test() {
@@ -845,14 +879,30 @@ pub fn diff_test() {
 // obj_to_path
 pub fn obj_to_path_test() {
   let vdevs = common_setup()
-  todo as "whole lotta Unix module wanted here"
+  common_mount_dataset(test_pool_name, test_mount_name)
+  let test_file_path = test_mount_name <> "/" <> test_file_name
+  common_create_file(test_file_path)
+  let obj = common_file_inode(test_file_path)
+  common_unmount_dataset(test_mount_name)
+  let hdl = ioctls.open_handle()
+  let assert Ok(path) = ioctls.obj_to_path(hdl, test_pool_name, obj)
+  assert ioctls.close_handle(hdl)
+  assert path == "/" <> test_file_name
   common_cleanup(vdevs)
 }
 
 // obj_to_stats
 pub fn obj_to_stats_test() {
   let vdevs = common_setup()
-  todo as "whole lotta Unix module wanted here"
+  common_mount_dataset(test_pool_name, test_mount_name)
+  let test_file_path = test_mount_name <> "/" <> test_file_name
+  common_create_file(test_file_path)
+  let obj = common_file_inode(test_file_path)
+  common_unmount_dataset(test_mount_name)
+  let hdl = ioctls.open_handle()
+  let assert Ok(stats) = ioctls.obj_to_stats(hdl, test_pool_name, obj)
+  assert ioctls.close_handle(hdl)
+  pprint.debug(stats)
   common_cleanup(vdevs)
 }
 
