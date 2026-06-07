@@ -584,10 +584,10 @@ zfs_call(ErlDrvData handle, unsigned int command, char *buf, ErlDrvSizeT len,
 			encode_zfs_cmd_res_headerv(&x, error, NULL, NULL);
 			ei_x_encode_list_header(&x, 1);
 
-			assert(zc.zc_nvlist_dst_size <=
-			    (result->orig_size + sizeof (uint64_t)));
+			assert(zc.zc_history_len <=
+			    (result->orig_size - sizeof (uint64_t)));
 			ei_x_encode_binary(&x, result->orig_bytes,
-			    zc.zc_nvlist_dst_size + sizeof (uint64_t));
+			    zc.zc_history_len + sizeof (uint64_t));
 			driver_free_binary(result);
 
 			ei_x_encode_empty_list(&x);

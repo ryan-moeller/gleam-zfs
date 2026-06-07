@@ -656,10 +656,10 @@ pub fn pool_get_history(
     ZfsCmdRes(
       error: 0,
       msg: None,
-      data: [<<len:native-size(64), rest:bytes-size(len)>>],
+      data: [<<new_offset:native-size(64), history_chunk:bytes>>],
     ) ->
-      case split_history([], rest) {
-        Ok(history) -> Ok(#(history, len))
+      case split_history([], history_chunk) {
+        Ok(history) -> Ok(#(history, new_offset))
         Error(Nil) -> Error(InternalError)
       }
     res -> Error(error(res))

@@ -8,6 +8,8 @@ import gleam/result
 import file_streams/file_stream
 import file_streams/internal/raw_result.{type RawResult}
 import iv
+import pprint
+
 import nvpair/list.{type NvList} as nvl
 import nvpair/stream as nvs
 
@@ -504,11 +506,20 @@ pub fn pool_upgrade_test() {
   common_cleanup(vdevs)
 }
 
+fn history_loop(hdl: ioctls.Handle, offset: Int) {
+  let assert Ok(result) = ioctls.pool_get_history(hdl, test_pool_name, offset)
+  pprint.debug(result)
+  case result {
+    #([], _) -> Nil
+    #(_, new_offset) -> history_loop(hdl, new_offset)
+  }
+}
+
 // pool_get_history
 pub fn pool_get_history_test() {
   let vdevs = common_setup()
   let hdl = ioctls.open_handle()
-  todo as "need to loop until consumed"
+  history_loop(hdl, 0)
   assert ioctls.close_handle(hdl)
   common_cleanup(vdevs)
 }
