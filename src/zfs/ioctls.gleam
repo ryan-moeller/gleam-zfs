@@ -2421,15 +2421,19 @@ pub fn pool_initialize(
   command: PoolInitializeFunc,
   vdevs: NvList,
 ) -> Result(Nil, Error) {
-  ioctl_unit(
-    hdl,
-    ZfsIocPoolInitialize,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Uint64("initialize_command", pool_initialize_func_index(command)),
-        nvl.Nvlist("initialize_vdevs", vdevs),
+  // XXX: This ioctl is bugged and returns an nvlist for errors in success.
+  result.replace(
+    ioctl_nvlist(
+      hdl,
+      ZfsIocPoolInitialize,
+      ZfsCmdReq(Some(name), data: [
+        nvlist([
+          nvl.Uint64("initialize_command", pool_initialize_func_index(command)),
+          nvl.Nvlist("initialize_vdevs", vdevs),
+        ]),
       ]),
-    ]),
+    ),
+    Nil,
   )
 }
 
@@ -2455,20 +2459,24 @@ pub fn pool_trim(
   rate: Option(Int),
   secure: Option(Bool),
 ) -> Result(Nil, Error) {
-  ioctl_unit(
-    hdl,
-    ZfsIocPoolTrim,
-    ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.Uint64("trim_command", pool_trim_func_index(command))),
-          Some(nvl.Nvlist("trim_vdevs", vdevs)),
-          option.map(rate, nvl.Uint64("trim_rate", _)),
-          option.map(secure, nvl.BooleanValue("trim_secure", _)),
+  // XXX: This ioctl is bugged and returns an nvlist for errors in success.
+  result.replace(
+    ioctl_nvlist(
+      hdl,
+      ZfsIocPoolTrim,
+      ZfsCmdReq(
+        Some(name),
+        data: option.values([
+          nvlist_opt([
+            Some(nvl.Uint64("trim_command", pool_trim_func_index(command))),
+            Some(nvl.Nvlist("trim_vdevs", vdevs)),
+            option.map(rate, nvl.Uint64("trim_rate", _)),
+            option.map(secure, nvl.BooleanValue("trim_secure", _)),
+          ]),
         ]),
-      ]),
+      ),
     ),
+    Nil,
   )
 }
 
