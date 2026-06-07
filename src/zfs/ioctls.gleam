@@ -36,6 +36,18 @@ fn opt(b: Bool, v: t) -> Option(t) {
   }
 }
 
+fn str_impl(len: Int, bytes: BitArray) -> Result(String, Nil) {
+  case bytes {
+    <<s:bytes-size(len), 0:size(8), _:bytes>> -> bit_array.to_string(s)
+    <<s:bytes-size(len)>> -> bit_array.to_string(s)
+    _ -> str_impl(len + 1, bytes)
+  }
+}
+
+fn str(bytes: BitArray) -> Result(String, Nil) {
+  str_impl(0, bytes)
+}
+
 pub opaque type Handle {
   Handle(inner: Port)
 }
@@ -883,7 +895,7 @@ fn bin_objset_stats(bin: BitArray) -> Option(ObjsetStats) {
       flags:size(8),
     >> -> {
       let assert Some(objset_type) = index_objset_type(objset_type_index)
-      let assert Ok(origin) = bit_array.to_string(origin_bytes)
+      let assert Ok(origin) = str(origin_bytes)
       Some(ObjsetStats(
         num_clones,
         creation_txg,
@@ -1465,7 +1477,7 @@ fn bin_inject_record(bin: BitArray) -> Option(InjectRecord) {
       let assert Some(object_type) = index_object_type(object_type_index)
       let assert Some(iotype) = index_inject_iotype(iotype_index)
       let assert Some(cmd) = index_inject_type(cmd_index)
-      let assert Ok(func) = bit_array.to_string(func_raw)
+      let assert Ok(func) = str(func_raw)
       Some(InjectRecord(
         objset,
         object,
@@ -1847,7 +1859,7 @@ fn bin_useracct(bin: BitArray) -> Option(Useracct) {
       _pad:size(32),
       space:native-unsigned-size(64),
     >> -> {
-      let assert Ok(domain) = bit_array.to_string(domain_raw)
+      let assert Ok(domain) = str(domain_raw)
       Some(Useracct(domain, rid, space))
     }
     _ -> None
