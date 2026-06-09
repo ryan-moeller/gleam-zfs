@@ -211,7 +211,7 @@ zfs_call(ErlDrvData handle, unsigned int command, char *buf, ErlDrvSizeT len,
 
 	char atom[MAXATOMLEN];
 	int version, arity, type, size;
-	int index = 0; /* XXX TODO: should validate index as we go */
+	int index = 0;
 
 	if (ei_decode_version(buf, &index, &version) == -1)
 		return zfs_fatal(rbuf, rlen);
