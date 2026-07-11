@@ -1,5 +1,5 @@
 %% Copyright (c) 2026 Ryan Moeller
-%% SPDX-License-Identifier: Apache-2.0
+%% SPDX-License-Identifier: BSD-2-Clause
 
 -module(devzfs).
 -moduledoc "
