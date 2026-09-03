@@ -1332,7 +1332,7 @@ pub fn space_written_test() {
     <> int.to_string(compressed)
     <> " compressed, "
     <> int.to_string(uncompressed)
-    <> " uncompressed",
+    <> " uncompressed)",
   )
   common_cleanup(vdevs)
 }
