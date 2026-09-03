@@ -13,6 +13,12 @@ import gleam/string
 import nvpair/list.{type NvList} as nvl
 import nvpair/stream as nvs
 
+import struct.{
+  type FieldValue, type Struct, type StructStorage, type StructT, Field,
+  FieldValue, Union, build_struct, int_int32, int_uint32, int_uint64, int_uint8,
+  sizeof_struct, string_pad, struct_read, uint64_int,
+}
+
 fn nvlist(pairs: List(nvl.Pair)) -> BitArray {
   let assert Some(nvl) = nvl.from_list(pairs, [nvl.UniqueName])
   nvs.pack(nvl, nvs.Native)
@@ -41,7 +47,7 @@ fn opt(b: Bool, v: t) -> Option(t) {
 
 fn str_impl(len: Int, bytes: BitArray) -> Result(String, Nil) {
   case bytes {
-    <<s:bytes-size(len), 0:size(8), _:bytes>> -> bit_array.to_string(s)
+    <<s:bytes-size(len), 0:unit(8)-size(1), _:bytes>> -> bit_array.to_string(s)
     <<s:bytes-size(len)>> -> bit_array.to_string(s)
     _ -> str_impl(len + 1, bytes)
   }
@@ -72,12 +78,16 @@ pub fn close_handle(hdl: Handle) -> Bool {
 @external(erlang, "erlang", "port_call")
 fn port_call(port: Port, op: Int, data: t1) -> t2
 
+pub type ZfsCmd =
+  StructStorage
+
 pub type Error {
   InternalError
-  ErrorCode(code: Int)
-  ErrorMessage(code: Int, message: String)
-  ErrorInfo(code: Int, info: NvList)
-  ErrorMessageWithInfo(code: Int, message: String, info: NvList)
+  ErrorWithZfsCmd(zc: ZfsCmd)
+  ErrorWithCode(zc: ZfsCmd, code: Int)
+  ErrorWithMessage(zc: ZfsCmd, code: Int, message: String)
+  ErrorWithInfo(zc: ZfsCmd, code: Int, info: NvList)
+  ErrorWithMessageAndInfo(zc: ZfsCmd, code: Int, message: String, info: NvList)
 }
 
 type ZfsIoc {
@@ -286,21 +296,263 @@ fn zfsioc_index(ioc: ZfsIoc) -> Int {
   }
 }
 
-type ZfsCmdReq {
-  ZfsCmdReq(name: Option(String), data: List(BitArray))
+const sizeof_char = 1
+
+const sizeof_int = 4
+
+const sizeof_uint8 = 1
+
+const sizeof_uint32 = 4
+
+const sizeof_uint64 = 8
+
+const sizeof_boolean = sizeof_int
+
+const sizeof_dmu_objset_type = sizeof_int
+
+const maxpathlen = 1024
+
+const maxnamelen = 256
+
+const zfs_max_dataset_name_len = maxnamelen
+
+type ZfsShareField {
+  ZExportData
+  ZShareData
+  ZShareType
+  ZShareMax
 }
 
-// TODO: The result interface needs further refinement.  Right now it is close
-// to the previous ErlIOVec-based interface, but with terms we are able to build
-// the final result term directly in the driver.  That would eliminate the error
-// handling code below.
-//
-// For now, the driver returns our command response type wrapped in a Result,
-// where Ok means the request was structurally valid and ioctl was invoked,
-// while Error means the request was malformed and ioctl could not be invoked.
+fn zfs_share_t() -> StructT(ZfsShareField) {
+  [
+    Field(ZExportData, sizeof_uint64),
+    Field(ZShareData, sizeof_uint64),
+    Field(ZShareType, sizeof_uint64),
+    Field(ZShareMax, sizeof_uint64),
+  ]
+}
+
+type DmuObjsetStatsField {
+  DdsNumClones
+  DdsCreationTxg
+  DdsGuid
+  DdsType
+  DdsIsSnapshot
+  DdsInconsistent
+  DdsRedacted
+  DdsOrigin
+  DdsFlags
+}
+
+fn dmu_objset_stats_t() -> StructT(DmuObjsetStatsField) {
+  [
+    Field(DdsNumClones, sizeof_uint64),
+    Field(DdsCreationTxg, sizeof_uint64),
+    Field(DdsGuid, sizeof_uint64),
+    Field(DdsType, sizeof_dmu_objset_type),
+    Field(DdsIsSnapshot, sizeof_uint8),
+    Field(DdsInconsistent, sizeof_uint8),
+    Field(DdsRedacted, sizeof_uint8),
+    Field(DdsOrigin, { sizeof_char * zfs_max_dataset_name_len }),
+    Field(DdsFlags, sizeof_uint8),
+  ]
+}
+
+type DrrBeginField {
+  DrrMagic
+  DrrVersionInfo
+  DrrCreationTime
+  DrrType
+  DrrFlags
+  DrrToguid
+  DrrFromguid
+  DrrToname
+}
+
+fn drr_begin_t() -> StructT(DrrBeginField) {
+  [
+    Field(DrrMagic, sizeof_uint64),
+    Field(DrrVersionInfo, sizeof_uint64),
+    Field(DrrCreationTime, sizeof_uint64),
+    Field(DrrType, sizeof_dmu_objset_type),
+    Field(DrrFlags, sizeof_uint32),
+    Field(DrrToguid, sizeof_uint64),
+    Field(DrrFromguid, sizeof_uint64),
+    Field(DrrToname, { sizeof_char * maxnamelen }),
+  ]
+}
+
+type ZinjectRecordField {
+  ZiObjset
+  ZiObject
+  ZiStart
+  ZiEnd
+  ZiGuid
+  ZiLevel
+  ZiError
+  ZiType
+  ZiFreq
+  ZiFailfast
+  ZiFunc
+  ZiIotype
+  ZiDuration
+  ZiTimer
+  ZiNlanes
+  ZiCmd
+  ZiDvas
+  ZiMatchCount
+  ZiInjectCount
+}
+
+fn zinject_record_t() -> StructT(ZinjectRecordField) {
+  [
+    Field(ZiObjset, sizeof_uint64),
+    Field(ZiObject, sizeof_uint64),
+    Field(ZiStart, sizeof_uint64),
+    Field(ZiEnd, sizeof_uint64),
+    Field(ZiGuid, sizeof_uint64),
+    Field(ZiLevel, sizeof_uint32),
+    Field(ZiError, sizeof_uint32),
+    Field(ZiType, sizeof_uint64),
+    Field(ZiFreq, sizeof_uint32),
+    Field(ZiFailfast, sizeof_uint32),
+    Field(ZiFunc, { sizeof_char * maxnamelen }),
+    Field(ZiIotype, sizeof_uint32),
+    Field(ZiDuration, sizeof_uint32),
+    Field(ZiTimer, sizeof_uint64),
+    Field(ZiNlanes, sizeof_uint64),
+    Field(ZiCmd, sizeof_uint32),
+    Field(ZiDvas, sizeof_uint32),
+    Field(ZiMatchCount, sizeof_uint64),
+    Field(ZiInjectCount, sizeof_uint64),
+  ]
+}
+
+type ZfsStatField {
+  ZsGen
+  ZsMode
+  ZsLinks
+  ZsCtime
+}
+
+fn zfs_stat_t() -> StructT(ZfsStatField) {
+  [
+    Field(ZsGen, sizeof_uint64),
+    Field(ZsMode, sizeof_uint64),
+    Field(ZsLinks, sizeof_uint64),
+    Field(ZsCtime, { sizeof_uint64 * 2 }),
+  ]
+}
+
+type ZfsCmdField {
+  ZcName
+  ZcNvlistSrc
+  ZcNvlistSrcSize
+  ZcNvlistDst
+  ZcNvlistDstSize
+  ZcNvlistDstFilled
+  ZcPad2
+  ZcHistory
+  ZcValue
+  ZcString
+  ZcGuid
+  ZcNvlistConf
+  ZcNvlistConfSize
+  ZcCookie
+  ZcObjsetType
+  ZcPermAction
+  ZcHistoryLen
+  ZcHistoryOffset
+  ZcObj
+  ZcIflags
+  ZcShare
+  ZcObjsetStats
+  ZcBeginRecord
+  ZcInjectRecord
+  ZcPad1
+  ZcDeferDestroy
+  ZcFlags
+  ZcActionHandle
+  ZcCleanupFd
+  ZcSimple
+  ZcPad
+  ZcSendobj
+  ZcFromobj
+  ZcCreatetxg
+  ZcStat
+  ZcZoneid
+}
+
+fn zfs_cmd_t() -> StructT(ZfsCmdField) {
+  [
+    Field(ZcName, { sizeof_char * maxpathlen }),
+    Field(ZcNvlistSrc, sizeof_uint64),
+    Field(ZcNvlistSrcSize, sizeof_uint64),
+    Field(ZcNvlistDst, sizeof_uint64),
+    Field(ZcNvlistDstSize, sizeof_uint64),
+    Field(ZcNvlistDstFilled, sizeof_boolean),
+    Field(ZcPad2, sizeof_int),
+    Field(ZcHistory, sizeof_uint64),
+    Field(ZcValue, { sizeof_char * maxpathlen * 2 }),
+    Field(ZcString, { sizeof_char * maxnamelen }),
+    Field(ZcGuid, sizeof_uint64),
+    Field(ZcNvlistConf, sizeof_uint64),
+    Field(ZcNvlistConfSize, sizeof_uint64),
+    Field(ZcCookie, sizeof_uint64),
+    Field(ZcObjsetType, sizeof_uint64),
+    Field(ZcPermAction, sizeof_uint64),
+    Field(ZcHistoryLen, sizeof_uint64),
+    Field(ZcHistoryOffset, sizeof_uint64),
+    Field(ZcObj, sizeof_uint64),
+    Field(ZcIflags, sizeof_uint64),
+    Field(ZcShare, sizeof_struct(zfs_share_t())),
+    Field(ZcObjsetStats, sizeof_struct(dmu_objset_stats_t())),
+    Field(ZcBeginRecord, sizeof_struct(drr_begin_t())),
+    Union([
+      [Field(ZcInjectRecord, sizeof_struct(zinject_record_t()))],
+      [
+        Field(ZcPad1, { sizeof_struct(zinject_record_t()) - 16 }),
+        Field(ZcDeferDestroy, sizeof_uint32),
+        Field(ZcFlags, sizeof_uint32),
+        Field(ZcActionHandle, sizeof_uint64),
+      ],
+    ]),
+    Field(ZcCleanupFd, sizeof_int),
+    Field(ZcSimple, sizeof_uint8),
+    Field(ZcPad, { sizeof_uint8 * 3 }),
+    Field(ZcSendobj, sizeof_uint64),
+    Field(ZcFromobj, sizeof_uint64),
+    Field(ZcCreatetxg, sizeof_uint64),
+    Field(ZcStat, sizeof_struct(zfs_stat_t())),
+    Field(ZcZoneid, sizeof_uint64),
+  ]
+}
+
+fn build_zfs_cmd(values: Struct(ZfsCmdField)) -> ZfsCmd {
+  build_struct(zfs_cmd_t(), values)
+}
+
+type ZfsCmdReq {
+  ZfsCmdReq(
+    zc: ZfsCmd,
+    history: Option(String),
+    // only for destroy, export
+    src: Option(BitArray),
+    conf: Option(BitArray),
+  )
+}
+
+// The driver returns our command response type wrapped in a Result, where Ok
+// means the request was structurally valid and ioctl was invoked, while Error
+// means the request was malformed and ioctl could not be invoked.
 
 type ZfsCmdRes {
-  ZfsCmdRes(error: Int, msg: Option(String), data: List(BitArray))
+  ZfsCmdRes(
+    zc: ZfsCmd,
+    error: Int,
+    message: Option(String),
+    dst: Option(BitArray),
+  )
 }
 
 fn ioctl(hdl: Handle, ioc: ZfsIoc, req: ZfsCmdReq) -> ZfsCmdRes {
@@ -311,24 +563,24 @@ fn ioctl(hdl: Handle, ioc: ZfsIoc, req: ZfsCmdReq) -> ZfsCmdRes {
 fn error(res: ZfsCmdRes) -> Error {
   assert res.error != 0
   case res {
-    ZfsCmdRes(error: error, msg: Some(msg), data: []) ->
-      ErrorMessage(error, msg)
-    ZfsCmdRes(error: error, msg: None, data: [packed_info]) -> {
+    ZfsCmdRes(zc, error, message: Some(message), dst: None) ->
+      ErrorWithMessage(zc, error, message)
+    ZfsCmdRes(zc, error, message: None, dst: Some(packed_info)) -> {
       let assert Ok(#(info, <<>>)) = nvs.unpack(packed_info)
-      ErrorInfo(error, info)
+      ErrorWithInfo(zc, error, info)
     }
-    ZfsCmdRes(error: error, msg: Some(msg), data: [packed_info]) -> {
+    ZfsCmdRes(zc, error, message: Some(message), dst: Some(packed_info)) -> {
       let assert Ok(#(info, <<>>)) = nvs.unpack(packed_info)
-      ErrorMessageWithInfo(error, msg, info)
+      ErrorWithMessageAndInfo(zc, error, message, info)
     }
-    _ -> InternalError
+    ZfsCmdRes(zc, ..) -> ErrorWithZfsCmd(zc)
   }
 }
 
 fn ioctl_unit(hdl: Handle, ioc: ZfsIoc, req: ZfsCmdReq) -> Result(Nil, Error) {
   case ioctl(hdl, ioc, req) {
-    ZfsCmdRes(error: 0, msg: None, data: []) -> Ok(Nil)
-    ZfsCmdRes(error: 0, msg: None, data: [packed]) -> {
+    ZfsCmdRes(error: 0, message: None, dst: None, ..) -> Ok(Nil)
+    ZfsCmdRes(error: 0, message: None, dst: Some(packed), ..) -> {
       let assert Ok(#(info, <<>>)) = nvs.unpack(packed)
       assert nvl.is_empty(info)
       Ok(Nil)
@@ -343,7 +595,7 @@ fn ioctl_nvlist(
   req: ZfsCmdReq,
 ) -> Result(NvList, Error) {
   case ioctl(hdl, ioc, req) {
-    ZfsCmdRes(error: 0, msg: None, data: [packed]) -> {
+    ZfsCmdRes(error: 0, message: None, dst: Some(packed), ..) -> {
       let assert Ok(#(nvl, <<>>)) = nvs.unpack(packed)
       Ok(nvl)
     }
@@ -351,39 +603,55 @@ fn ioctl_nvlist(
   }
 }
 
+const esrch = 3
+
 fn ioctl_stats_list_next(
   hdl: Handle,
   ioc: ZfsIoc,
-  simple: Bool,
   req: ZfsCmdReq,
 ) -> Result(Option(#(String, Int, ObjsetStats, Option(NvList))), Error) {
   case ioctl(hdl, ioc, req) {
-    ZfsCmdRes(error: 0, msg: None, data: []) -> Ok(None)
-    ZfsCmdRes(error: 0, msg: None, data: data) -> {
-      use #(results, config) <- result.try(case data {
-        [packed_results, packed_config] -> {
-          assert !simple
-          let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-          let assert Ok(#(config, <<>>)) = nvs.unpack(packed_config)
-          Ok(#(results, Some(config)))
-        }
-        [packed_results] -> {
-          assert simple
-          let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-          Ok(#(results, None))
-        }
-        _ -> Error(InternalError)
-      })
-      let assert Some(nvl.String(_, next_name)) = nvl.lookup(results, "name")
-      let assert Some(nvl.Uint64(_, next_cookie)) =
-        nvl.lookup(results, "cookie")
-      let assert Some(nvl.ByteArray(_, objset_stats_bin)) =
-        nvl.lookup(results, "objset_stats")
-      let assert Some(objset_stats) = bin_objset_stats(objset_stats_bin)
-      Ok(Some(#(next_name, next_cookie, objset_stats, config)))
+    ZfsCmdRes(zc: _, error: error, message: None, dst: None) if error == esrch ->
+      Ok(None)
+    ZfsCmdRes(zc, error: 0, message: None, dst: dst) -> {
+      let t = zfs_cmd_t()
+      use next_name <- result.try(
+        struct_read(t, ZcName, zc)
+        |> str()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      use next_cookie <- result.try(
+        struct_read(t, ZcCookie, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      use objset_stats <- result.try(
+        struct_read(t, ZcObjsetStats, zc)
+        |> bin_objset_stats()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      Ok(
+        Some(#(
+          next_name,
+          next_cookie,
+          objset_stats,
+          option.map(dst, fn(packed_config) {
+            let assert Ok(#(config, <<>>)) = nvs.unpack(packed_config)
+            config
+          }),
+        )),
+      )
     }
     res -> Error(error(res))
   }
+}
+
+fn zfs_cmd_string_field(
+  field: ZfsCmdField,
+  value: String,
+) -> Result(FieldValue(ZfsCmdField), Error) {
+  string_pad(zfs_cmd_t(), field, value)
+  |> result.replace_error(InternalError)
 }
 
 pub fn pool_create(
@@ -392,15 +660,15 @@ pub fn pool_create(
   config: NvList,
   props: Option(NvList),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocPoolCreate,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        Some(nvs.pack(config, nvs.Native)),
-        option.map(props, nvs.pack(_, nvs.Native)),
-      ]),
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: option.map(props, nvs.pack(_, nvs.Native)),
+      conf: Some(nvs.pack(config, nvs.Native)),
     ),
   )
 }
@@ -410,14 +678,15 @@ pub fn pool_destroy(
   name: String,
   history: Option(String),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocPoolDestroy,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([option.map(history, nvl.String("history", _))]),
-      ]),
+      zc: build_zfs_cmd([name_field]),
+      history: history,
+      src: None,
+      conf: None,
     ),
   )
 }
@@ -458,21 +727,22 @@ pub fn pool_import(
   props: Option(NvList),
   flags: List(ImportFlag),
 ) -> Result(NvList, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let packed_config = nvs.pack(config, nvs.Native)
+  let packed_config_size = bit_array.byte_size(packed_config)
   ioctl_nvlist(
     hdl,
     ZfsIocPoolImport,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        Some(
-          nvlist([
-            nvl.Uint64("cookie", import_flags_int(flags)),
-            nvl.Uint64("guid", guid),
-          ]),
-        ),
-        Some(nvs.pack(config, nvs.Native)),
-        option.map(props, nvs.pack(_, nvs.Native)),
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcCookie, import_flags_int(flags) |> int_uint64()),
+        FieldValue(ZcGuid, int_uint64(guid)),
+        FieldValue(ZcNvlistDstSize, int_uint64(2 * packed_config_size)),
       ]),
+      history: None,
+      src: option.map(props, nvs.pack(_, nvs.Native)),
+      conf: Some(packed_config),
     ),
   )
 }
@@ -484,25 +754,43 @@ pub fn pool_export(
   hardforce: Bool,
   history: Option(String),
 ) -> Result(Nil, Error) {
-  let assert Some(params) =
-    nvlist_opt([
-      Some(nvl.Uint64("cookie", int(force))),
-      Some(nvl.Uint64("guid", int(hardforce))),
-      option.map(history, nvl.String("history", _)),
-    ])
-  ioctl_unit(hdl, ZfsIocPoolExport, ZfsCmdReq(Some(name), data: [params]))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_unit(
+    hdl,
+    ZfsIocPoolExport,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcCookie, int(force) |> int_uint64()),
+        FieldValue(ZcGuid, int(hardforce) |> int_uint64()),
+      ]),
+      history: history,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub fn pool_configs(hdl: Handle, ns_gen: Int) -> Result(#(Int, NvList), Error) {
+  let t = zfs_cmd_t()
   let req =
-    ZfsCmdReq(None, data: [
-      nvlist([nvl.Uint64("cookie", ns_gen)]),
-    ])
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        FieldValue(ZcCookie, int_uint64(ns_gen)),
+        FieldValue(ZcNvlistDstSize, int_uint64(256 * 1024)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
   case ioctl(hdl, ZfsIocPoolConfigs, req) {
-    ZfsCmdRes(error: 0, msg: None, data: [packed_results, packed_configs]) -> {
-      let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
+    ZfsCmdRes(zc, error: 0, message: None, dst: Some(packed_configs)) -> {
+      use ns_gen <- result.try(
+        struct_read(t, ZcCookie, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
       let assert Ok(#(configs, <<>>)) = nvs.unpack(packed_configs)
-      let assert Some(nvl.Uint64(_, ns_gen)) = nvl.lookup(results, "cookie")
       Ok(#(ns_gen, configs))
     }
     res -> Error(error(res))
@@ -513,15 +801,36 @@ pub fn pool_stats(
   hdl: Handle,
   name: String,
 ) -> Result(#(Option(NvList), Option(String), Option(Int)), Error) {
-  case ioctl(hdl, ZfsIocPoolStats, ZfsCmdReq(Some(name), [])) {
-    ZfsCmdRes(error: 0, msg: None, data: [packed_results, packed_config]) -> {
-      let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Some(nvl.Uint64(_, error)) = nvl.lookup(results, "cookie")
-      let assert Some(nvl.String(_, altroot)) = nvl.lookup(results, "value")
-      let assert Ok(#(config, <<>>)) = nvs.unpack(packed_config)
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let req =
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(64 * 1024)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
+  let t = zfs_cmd_t()
+  case ioctl(hdl, ZfsIocPoolStats, req) {
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: dst) -> {
+      use error <- result.try(
+        struct_read(t, ZcCookie, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      use altroot <- result.try(
+        struct_read(t, ZcValue, zc)
+        |> str()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
       Ok(
         #(
-          Some(config),
+          option.map(dst, fn(packed_config) {
+            let assert Ok(#(config, <<>>)) = nvs.unpack(packed_config)
+            config
+          }),
           case altroot {
             "" -> None
             _ -> Some(altroot)
@@ -533,9 +842,12 @@ pub fn pool_stats(
         ),
       )
     }
-    ZfsCmdRes(error: error, msg: None, data: [packed_results]) -> {
-      let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Some(nvl.String(_, altroot)) = nvl.lookup(results, "value")
+    ZfsCmdRes(zc: zc, error: error, message: None, dst: None) -> {
+      use altroot <- result.try(
+        struct_read(t, ZcValue, zc)
+        |> str()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
       Ok(
         #(
           None,
@@ -555,10 +867,18 @@ pub fn pool_stats(
 }
 
 pub fn pool_tryimport(hdl: Handle, config: NvList) -> Result(NvList, Error) {
+  let packed_config = nvs.pack(config, nvs.Native)
+  let packed_config_size = bit_array.byte_size(packed_config)
+  let dst_size = int.max(256 * 1024, packed_config_size * 32)
   ioctl_nvlist(
     hdl,
     ZfsIocPoolTryImport,
-    ZfsCmdReq(None, data: [nvs.pack(config, nvs.Native)]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([FieldValue(ZcNvlistDstSize, int_uint64(dst_size))]),
+      history: None,
+      src: None,
+      conf: Some(packed_config),
+    ),
   )
 }
 
@@ -598,20 +918,35 @@ pub fn pool_scan(
   func: PoolScanFunc,
   cmd: PoolScrubCmd,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocPoolScan,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Uint64("cookie", scan_func_index(func)),
-        nvl.Uint32("flags", scrub_cmd_index(cmd)),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcCookie, scan_func_index(func) |> int_uint64()),
+        FieldValue(ZcFlags, scrub_cmd_index(cmd) |> int_uint32()),
       ]),
-    ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
 
 pub fn pool_freeze(hdl: Handle, name: String) -> Result(Nil, Error) {
-  ioctl_unit(hdl, ZfsIocPoolFreeze, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_unit(
+    hdl,
+    ZfsIocPoolFreeze,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub fn pool_upgrade(
@@ -619,12 +954,19 @@ pub fn pool_upgrade(
   name: String,
   version: Int,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocPoolUpgrade,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("cookie", version)]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcCookie, int_uint64(version)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
 
@@ -651,19 +993,27 @@ pub fn pool_get_history(
   name: String,
   offset: Int,
 ) -> Result(#(List(NvList), Int), Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   let req =
-    ZfsCmdReq(Some(name), [
-      nvlist([nvl.Uint64("history_offset", offset)]),
-    ])
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcHistoryOffset, int_uint64(offset)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
   case ioctl(hdl, ZfsIocPoolGetHistory, req) {
     ZfsCmdRes(
+      zc,
       error: 0,
-      msg: None,
-      data: [<<new_offset:native-size(64), history_chunk:bytes>>],
+      message: None,
+      dst: Some(<<new_offset:native-unsigned-size(64), history_chunk:bytes>>),
     ) ->
       case split_history([], history_chunk) {
         Ok(history) -> Ok(#(history, new_offset))
-        Error(Nil) -> Error(InternalError)
+        Error(Nil) -> Error(ErrorWithZfsCmd(zc))
       }
     res -> Error(error(res))
   }
@@ -675,36 +1025,55 @@ pub fn vdev_add(
   config: NvList,
   check_ashift: Bool,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocVdevAdd,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([opt(check_ashift, nvl.Uint32("flags", int(True)))]),
-        Some(nvs.pack(config, nvs.Native)),
-      ]),
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          opt(check_ashift, FieldValue(ZcFlags, int(True) |> int_uint32())),
+        ]),
+      ),
+      history: None,
+      src: None,
+      conf: Some(nvs.pack(config, nvs.Native)),
     ),
   )
 }
 
 pub fn vdev_remove(hdl: Handle, name: String, guid: Int) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocVdevRemove,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("guid", guid)]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcGuid, int_uint64(guid)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
 
 pub fn vdev_remove_cancel(hdl: Handle, name: String) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocVdevRemove,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("cookie", int(True))]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcCookie, int(True) |> int_uint64()),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
 
@@ -753,23 +1122,33 @@ pub fn vdev_set_state(
   state: VdevState,
   flags: Option(Int),
 ) -> Result(VdevState, Error) {
-  use results <- result.try(ioctl_nvlist(
-    hdl,
-    ZfsIocVdevSetState,
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let req =
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.Uint64("guid", guid)),
-          Some(nvl.Uint64("cookie", vdev_state_index(state))),
-          option.map(flags, nvl.Uint64("obj", _)),
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          Some(FieldValue(ZcCookie, vdev_state_index(state) |> int_uint64())),
+          Some(FieldValue(ZcGuid, int_uint64(guid))),
+          option.map(flags, fn(obj) { FieldValue(ZcObj, int_uint64(obj)) }),
         ]),
-      ]),
-    ),
-  ))
-  let assert Some(nvl.Uint64(_, newstate)) = nvl.lookup(results, "cookie")
-  let assert Some(newstate) = index_vdev_state(newstate)
-  Ok(newstate)
+      ),
+      history: None,
+      src: None,
+      conf: None,
+    )
+  case ioctl(hdl, ZfsIocVdevSetState, req) {
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: None) -> {
+      use cookie <- result.try(
+        struct_read(zfs_cmd_t(), ZcCookie, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      let assert Some(vdev_state) = index_vdev_state(cookie)
+      Ok(vdev_state)
+    }
+    res -> Error(error(res))
+  }
 }
 
 pub fn vdev_attach(
@@ -780,30 +1159,40 @@ pub fn vdev_attach(
   replacing: Bool,
   rebuild: Bool,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocVdevAttach,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          opt(replacing, nvl.Uint64("cookie", int(True))),
-          Some(nvl.Uint64("guid", guid)),
-          opt(rebuild, nvl.Uint8("simple", int(True))),
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          opt(replacing, FieldValue(ZcCookie, int(True) |> int_uint64())),
+          Some(FieldValue(ZcGuid, int_uint64(guid))),
+          opt(rebuild, FieldValue(ZcSimple, int(True) |> int_uint8())),
         ]),
-        Some(nvs.pack(config, nvs.Native)),
-      ]),
+      ),
+      history: None,
+      src: None,
+      conf: Some(nvs.pack(config, nvs.Native)),
     ),
   )
 }
 
 pub fn vdev_detach(hdl: Handle, name: String, guid: Int) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocVdevDetach,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("guid", guid)]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcGuid, int_uint64(guid)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
 
@@ -813,15 +1202,21 @@ pub fn vdev_set_path(
   guid: Int,
   path: String,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  use value_field <- result.try(zfs_cmd_string_field(ZcValue, path))
   ioctl_unit(
     hdl,
     ZfsIocVdevSetPath,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Uint64("guid", guid),
-        nvl.String("value", path),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcGuid, int_uint64(guid)),
+        value_field,
       ]),
-    ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
 
@@ -831,15 +1226,21 @@ pub fn vdev_set_fru(
   guid: Int,
   fru: String,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  use value_field <- result.try(zfs_cmd_string_field(ZcValue, fru))
   ioctl_unit(
     hdl,
     ZfsIocVdevSetFru,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Uint64("guid", guid),
-        nvl.String("value", fru),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcGuid, int_uint64(guid)),
+        value_field,
       ]),
-    ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
 
@@ -889,10 +1290,7 @@ pub type ObjsetStats {
   )
 }
 
-// TODO: This should live elsewhere
-pub const zfs_max_dataset_name_len = 256
-
-fn bin_objset_stats(bin: BitArray) -> Option(ObjsetStats) {
+fn bin_objset_stats(bin: BitArray) -> Result(ObjsetStats, Nil) {
   case bin {
     <<
       num_clones:native-unsigned-size(64),
@@ -907,7 +1305,7 @@ fn bin_objset_stats(bin: BitArray) -> Option(ObjsetStats) {
     >> -> {
       let assert Some(objset_type) = index_objset_type(objset_type_index)
       let assert Ok(origin) = str(origin_bytes)
-      Some(ObjsetStats(
+      Ok(ObjsetStats(
         num_clones,
         creation_txg,
         guid,
@@ -919,7 +1317,7 @@ fn bin_objset_stats(bin: BitArray) -> Option(ObjsetStats) {
         flags,
       ))
     }
-    _ -> None
+    _ -> Error(Nil)
   }
 }
 
@@ -928,34 +1326,54 @@ pub fn objset_stats(
   name: String,
   simple: Bool,
 ) -> Result(#(ObjsetStats, Option(NvList)), Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   let req =
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint8("simple", int(simple))]),
-    ])
+    ZfsCmdReq(
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          Some(FieldValue(ZcSimple, int(simple) |> int_uint8())),
+          opt(!simple, FieldValue(ZcNvlistDstSize, int_uint64(256 * 1024))),
+        ]),
+      ),
+      history: None,
+      src: None,
+      conf: None,
+    )
   case ioctl(hdl, ZfsIocObjsetStats, req) {
-    ZfsCmdRes(error: 0, msg: None, data: [packed_results, packed_props]) -> {
-      assert !simple
-      let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Ok(#(props, <<>>)) = nvs.unpack(packed_props)
-      let assert Some(nvl.ByteArray(_, stats_bin)) =
-        nvl.lookup(results, "objset_stats")
-      let assert Some(objset_stats) = bin_objset_stats(stats_bin)
-      Ok(#(objset_stats, Some(props)))
-    }
-    ZfsCmdRes(error: 0, msg: None, data: [packed_results]) -> {
-      assert simple
-      let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Some(nvl.ByteArray(_, stats_bin)) =
-        nvl.lookup(results, "objset_stats")
-      let assert Some(objset_stats) = bin_objset_stats(stats_bin)
-      Ok(#(objset_stats, None))
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: dst) -> {
+      use objset_stats <- result.try(
+        struct_read(zfs_cmd_t(), ZcObjsetStats, zc)
+        |> bin_objset_stats()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      Ok(#(
+        objset_stats,
+        option.map(dst, fn(packed_props) {
+          let assert Ok(#(props, <<>>)) = nvs.unpack(packed_props)
+          props
+        }),
+      ))
     }
     res -> Error(error(res))
   }
 }
 
 pub fn objset_zpl_props(hdl: Handle, name: String) -> Result(NvList, Error) {
-  ioctl_nvlist(hdl, ZfsIocObjsetZplProps, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_nvlist(
+    hdl,
+    ZfsIocObjsetZplProps,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(256 * 1024)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub fn dataset_list_next(
@@ -964,16 +1382,23 @@ pub fn dataset_list_next(
   simple: Bool,
   cookie: Int,
 ) -> Result(Option(#(String, Int, ObjsetStats, Option(NvList))), Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_stats_list_next(
     hdl,
     ZfsIocDatasetListNext,
-    simple,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Uint8("simple", int(simple)),
-        nvl.Uint64("cookie", cookie),
-      ]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          Some(FieldValue(ZcSimple, int(simple) |> int_uint8())),
+          Some(FieldValue(ZcCookie, int_uint64(cookie))),
+          opt(!simple, FieldValue(ZcNvlistDstSize, int_uint64(256 * 1024))),
+        ]),
+      ),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
 
@@ -983,16 +1408,23 @@ pub fn snapshot_list_next(
   simple: Bool,
   cookie: Int,
 ) -> Result(Option(#(String, Int, ObjsetStats, Option(NvList))), Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_stats_list_next(
     hdl,
     ZfsIocSnapshotListNext,
-    simple,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Uint8("simple", int(simple)),
-        nvl.Uint64("cookie", cookie),
-      ]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          Some(FieldValue(ZcSimple, int(simple) |> int_uint8())),
+          Some(FieldValue(ZcCookie, int_uint64(cookie))),
+          opt(!simple, FieldValue(ZcNvlistDstSize, int_uint64(256 * 1024))),
+        ]),
+      ),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
 
@@ -1001,10 +1433,22 @@ pub fn set_prop(
   name: String,
   props: NvList,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let packed_props = nvs.pack(props, nvs.Native)
+  let packed_props_size = bit_array.byte_size(packed_props)
+  let dst_size = int.max(256 * 1024, packed_props_size)
   ioctl_unit(
     hdl,
     ZfsIocSetProp,
-    ZfsCmdReq(Some(name), data: [nvs.pack(props, nvs.Native)]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
+      ]),
+      history: None,
+      src: Some(packed_props),
+      conf: None,
+    ),
   )
 }
 
@@ -1015,31 +1459,33 @@ pub fn create(
   props: Option(NvList),
   hidden_args: Option(NvList),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocCreate,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.Int32("type", objset_type_index(objset_type))),
-          option.map(props, nvl.Nvlist("props", _)),
-          option.map(hidden_args, nvl.Nvlist("hidden_args", _)),
-        ]),
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: nvlist_opt([
+        Some(nvl.Int32("type", objset_type_index(objset_type))),
+        option.map(props, nvl.Nvlist("props", _)),
+        option.map(hidden_args, nvl.Nvlist("hidden_args", _)),
       ]),
+      conf: None,
     ),
   )
 }
 
 pub fn destroy(hdl: Handle, name: String, defer: Bool) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocDestroy,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([opt(defer, nvl.Uint32("defer_destroy", int(True)))]),
-      ]),
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: nvlist_opt([opt(defer, nvl.Uint32("defer_destroy", int(True)))]),
+      conf: None,
     ),
   )
 }
@@ -1049,14 +1495,18 @@ pub fn rollback(
   name: String,
   target: Option(String),
 ) -> Result(String, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   use results <- result.try(ioctl_nvlist(
     hdl,
     ZfsIocRollback,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([option.map(target, nvl.String("target", _))]),
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(128 * 1024)),
       ]),
+      history: None,
+      src: nvlist_opt([option.map(target, nvl.String("target", _))]),
+      conf: None,
     ),
   ))
   let assert Some(nvl.String(_, target)) = nvl.lookup(results, "target")
@@ -1083,20 +1533,28 @@ pub fn rename(
   newname: String,
   flags: List(RenameFlag),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  use value_field <- result.try(zfs_cmd_string_field(ZcValue, newname))
+  let flags_opt = case flags {
+    [] -> None
+    _ -> Some(rename_flags_int(flags))
+  }
   ioctl_unit(
     hdl,
     ZfsIocRename,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.String("value", newname)),
-          case flags {
-            [] -> None
-            _ -> Some(nvl.Uint64("cookie", rename_flags_int(flags)))
-          },
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          Some(value_field),
+          option.map(flags_opt, fn(cookie) {
+            FieldValue(ZcCookie, int_uint64(cookie))
+          }),
         ]),
-      ]),
+      ),
+      history: None,
+      src: None,
+      conf: None,
     ),
   )
 }
@@ -1460,9 +1918,7 @@ pub type InjectRecord {
   )
 }
 
-const maxnamelen = 256
-
-fn bin_inject_record(bin: BitArray) -> Option(InjectRecord) {
+fn bin_inject_record(bin: BitArray) -> Result(InjectRecord, Nil) {
   case bin {
     <<
       objset:native-unsigned-size(64),
@@ -1489,7 +1945,7 @@ fn bin_inject_record(bin: BitArray) -> Option(InjectRecord) {
       let assert Some(iotype) = index_inject_iotype(iotype_index)
       let assert Some(cmd) = index_inject_type(cmd_index)
       let assert Ok(func) = str(func_raw)
-      Some(InjectRecord(
+      Ok(InjectRecord(
         objset,
         object,
         start,
@@ -1511,7 +1967,7 @@ fn bin_inject_record(bin: BitArray) -> Option(InjectRecord) {
         inject_count,
       ))
     }
-    _ -> None
+    _ -> Error(Nil)
   }
 }
 
@@ -1565,46 +2021,79 @@ pub fn inject_fault(
   record: InjectRecord,
   flags: List(ZinjectFlag),
 ) -> Result(Int, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   let req =
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Uint64("guid", zinject_flags_int(flags)),
-        nvl.ByteArray("inject_record", inject_record_bin(record)),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcGuid, zinject_flags_int(flags) |> int_uint64()),
+        FieldValue(ZcInjectRecord, inject_record_bin(record)),
       ]),
-    ])
-  use results <- result.try(ioctl_nvlist(hdl, ZfsIocInjectFault, req))
-  let assert Some(nvl.Uint64(_, guid)) = nvl.lookup(results, "guid")
-  Ok(guid)
+      history: None,
+      src: None,
+      conf: None,
+    )
+  case ioctl(hdl, ZfsIocInjectFault, req) {
+    ZfsCmdRes(zc, error: 0, message: None, dst: None) ->
+      struct_read(zfs_cmd_t(), ZcGuid, zc)
+      |> uint64_int()
+      |> result.replace_error(ErrorWithZfsCmd(zc))
+    res -> Error(error(res))
+  }
 }
 
 pub fn clear_fault(hdl: Handle, guid: Int) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocClearFault,
-    ZfsCmdReq(None, data: [nvlist([nvl.Uint64("guid", guid)])]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        FieldValue(ZcGuid, int_uint64(guid)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
+
+const enoent = 2
 
 pub fn inject_list_next(
   hdl: Handle,
   guid: Int,
 ) -> Result(Option(#(Int, String, InjectRecord)), Error) {
   let req =
-    ZfsCmdReq(None, data: [
-      nvlist([nvl.Uint64("guid", guid)]),
-    ])
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        FieldValue(ZcGuid, int_uint64(guid)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
   case ioctl(hdl, ZfsIocInjectListNext, req) {
-    ZfsCmdRes(error: 0, msg: None, data: [packed_results]) -> {
-      let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Some(nvl.Uint64(_, guid)) = nvl.lookup(results, "guid")
-      let assert Some(nvl.String(_, name)) = nvl.lookup(results, "name")
-      let assert Some(nvl.ByteArray(_, inject_record_bin)) =
-        nvl.lookup(results, "inject_record")
-      let assert Some(inject_record) = bin_inject_record(inject_record_bin)
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: None) -> {
+      let t = zfs_cmd_t()
+      use guid <- result.try(
+        struct_read(t, ZcGuid, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      use name <- result.try(
+        struct_read(t, ZcName, zc)
+        |> str()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      use inject_record <- result.try(
+        struct_read(t, ZcInjectRecord, zc)
+        |> bin_inject_record()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
       Ok(Some(#(guid, name, inject_record)))
     }
-    // ENOENT
-    ZfsCmdRes(error: 2, msg: _, data: []) -> Ok(None)
+    ZfsCmdRes(zc: _, error: error, message: _, dst: None) if error == enoent ->
+      Ok(None)
     res -> Error(error(res))
   }
 }
@@ -1649,8 +2138,16 @@ pub fn error_log(
   hdl: Handle,
   name: String,
 ) -> Result(List(ZbookmarkPhys), Error) {
-  case ioctl(hdl, ZfsIocErrorLog, ZfsCmdReq(Some(name), [])) {
-    ZfsCmdRes(error: 0, msg: None, data: [bookmarks_bin]) -> {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let req =
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: None,
+      conf: None,
+    )
+  case ioctl(hdl, ZfsIocErrorLog, req) {
+    ZfsCmdRes(zc: _, error: 0, message: None, dst: Some(bookmarks_bin)) -> {
       let assert Some(bookmarks) = bin_bookmarks(bookmarks_bin)
       Ok(bookmarks)
     }
@@ -1658,39 +2155,48 @@ pub fn error_log(
   }
 }
 
+const zpool_no_rewind = 1
+
 pub fn clear(
   hdl: Handle,
   name: String,
   guid: Option(Int),
   rewind_policy: Option(NvList),
 ) -> Result(Option(NvList), Error) {
-  // XXX: Always send a params nvlist to avoid ambiguity.
-  let params = nvlist([nvl.Uint64("guid", option.unwrap(guid, 0))])
-  case rewind_policy {
-    Some(policy) -> {
-      use config <- result.try(ioctl_nvlist(
-        hdl,
-        ZfsIocClear,
-        ZfsCmdReq(Some(name), data: [
-          params,
-          nvs.pack(policy, nvs.Native),
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let no_rewind = option.is_none(rewind_policy)
+  let req =
+    ZfsCmdReq(
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          opt(no_rewind, FieldValue(ZcCookie, int_uint64(zpool_no_rewind))),
+          option.map(guid, fn(guid) { FieldValue(ZcGuid, int_uint64(guid)) }),
+          Some(FieldValue(ZcNvlistDstSize, int_uint64(256 * 1024))),
         ]),
-      ))
-      Ok(Some(config))
-    }
-    None -> {
-      use Nil <- result.try(ioctl_unit(
-        hdl,
-        ZfsIocClear,
-        ZfsCmdReq(Some(name), data: [params]),
-      ))
-      Ok(None)
-    }
+      ),
+      history: None,
+      src: option.map(rewind_policy, nvs.pack(_, nvs.Native)),
+      conf: None,
+    )
+  case no_rewind {
+    True -> ioctl_unit(hdl, ZfsIocClear, req) |> result.replace(None)
+    False -> ioctl_nvlist(hdl, ZfsIocClear, req) |> result.map(Some)
   }
 }
 
 pub fn promote(hdl: Handle, name: String) -> Result(Nil, Error) {
-  ioctl_unit(hdl, ZfsIocPromote, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_unit(
+    hdl,
+    ZfsIocPromote,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub fn snapshot(
@@ -1699,17 +2205,25 @@ pub fn snapshot(
   snaps: NvList,
   props: Option(NvList),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let assert Some(packed_args) =
+    nvlist_opt([
+      Some(nvl.Nvlist("snaps", snaps)),
+      option.map(props, nvl.Nvlist("props", _)),
+    ])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_unit(
     hdl,
     ZfsIocSnapshot,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.Nvlist("snaps", snaps)),
-          option.map(props, nvl.Nvlist("props", _)),
-        ]),
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
       ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
     ),
   )
 }
@@ -1719,15 +2233,24 @@ pub fn ds_obj_to_ds_name(
   name: String,
   dsobj: Int,
 ) -> Result(String, Error) {
-  use results <- result.try(ioctl_nvlist(
-    hdl,
-    ZfsIocDsObjToDsName,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("obj", dsobj)]),
-    ]),
-  ))
-  let assert Some(nvl.String(_, dsname)) = nvl.lookup(results, "value")
-  Ok(dsname)
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let req =
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcObj, int_uint64(dsobj)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
+  case ioctl(hdl, ZfsIocDsObjToDsName, req) {
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: None) ->
+      struct_read(zfs_cmd_t(), ZcValue, zc)
+      |> str()
+      |> result.replace_error(ErrorWithZfsCmd(zc))
+    res -> Error(error(res))
+  }
 }
 
 pub fn obj_to_path(
@@ -1735,15 +2258,24 @@ pub fn obj_to_path(
   name: String,
   obj: Int,
 ) -> Result(String, Error) {
-  use results <- result.try(ioctl_nvlist(
-    hdl,
-    ZfsIocObjToPath,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("obj", obj)]),
-    ]),
-  ))
-  let assert Some(nvl.String(_, path)) = nvl.lookup(results, "value")
-  Ok(path)
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let req =
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcObj, int_uint64(obj)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
+  case ioctl(hdl, ZfsIocObjToPath, req) {
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: None) ->
+      struct_read(zfs_cmd_t(), ZcValue, zc)
+      |> str()
+      |> result.replace_error(ErrorWithZfsCmd(zc))
+    res -> Error(error(res))
+  }
 }
 
 pub fn pool_set_props(
@@ -1751,17 +2283,34 @@ pub fn pool_set_props(
   name: String,
   props: NvList,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocPoolSetProps,
-    ZfsCmdReq(Some(name), data: [
-      nvs.pack(props, nvs.Native),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: Some(nvs.pack(props, nvs.Native)),
+      conf: None,
+    ),
   )
 }
 
 pub fn pool_get_props(hdl: Handle, name: String) -> Result(NvList, Error) {
-  ioctl_nvlist(hdl, ZfsIocPoolGetProps, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_nvlist(
+    hdl,
+    ZfsIocPoolGetProps,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(256 * 1024)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub fn set_fsacl(
@@ -1770,18 +2319,37 @@ pub fn set_fsacl(
   un: Bool,
   acl: NvList,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocSetFsacl,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("perm_action", int(un))]),
-      nvs.pack(acl, nvs.Native),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcPermAction, int(un) |> int_uint64()),
+      ]),
+      history: None,
+      src: Some(nvs.pack(acl, nvs.Native)),
+      conf: None,
+    ),
   )
 }
 
 pub fn get_fsacl(hdl: Handle, name: String) -> Result(NvList, Error) {
-  ioctl_nvlist(hdl, ZfsIocGetFsacl, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_nvlist(
+    hdl,
+    ZfsIocGetFsacl,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(2048)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub fn inherit_prop(
@@ -1790,17 +2358,22 @@ pub fn inherit_prop(
   prop: String,
   received: Bool,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  use value_field <- result.try(zfs_cmd_string_field(ZcValue, prop))
   ioctl_unit(
     hdl,
     ZfsIocInheritProp,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.String("value", prop)),
-          opt(received, nvl.Uint64("cookie", int(True))),
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          Some(value_field),
+          opt(received, FieldValue(ZcCookie, int(True) |> int_uint64())),
         ]),
-      ]),
+      ),
+      history: None,
+      src: None,
+      conf: None,
     ),
   )
 }
@@ -1844,26 +2417,34 @@ pub fn user_space_one(
   domain: String,
   id: Int,
 ) -> Result(Int, Error) {
-  use results <- result.try(ioctl_nvlist(
-    hdl,
-    ZfsIocUserSpaceOne,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Uint64("objset_type", user_quota_prop_index(prop)),
-        nvl.Uint64("guid", id),
-        nvl.String("value", domain),
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  use value_field <- result.try(zfs_cmd_string_field(ZcValue, domain))
+  let req =
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcObjsetType, user_quota_prop_index(prop) |> int_uint64()),
+        value_field,
+        FieldValue(ZcGuid, int_uint64(id)),
       ]),
-    ]),
-  ))
-  let assert Some(nvl.Uint64(_, space)) = nvl.lookup(results, "cookie")
-  Ok(space)
+      history: None,
+      src: None,
+      conf: None,
+    )
+  case ioctl(hdl, ZfsIocUserSpaceOne, req) {
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: None) ->
+      struct_read(zfs_cmd_t(), ZcCookie, zc)
+      |> uint64_int()
+      |> result.replace_error(ErrorWithZfsCmd(zc))
+    res -> Error(error(res))
+  }
 }
 
 pub type UserAcct {
   UserAcct(domain: String, rid: Int, space: Int)
 }
 
-fn bin_user_acct(bin: BitArray) -> Option(UserAcct) {
+fn bin_user_acct(bin: BitArray) -> Result(UserAcct, Nil) {
   case bin {
     <<
       domain_raw:bytes-size(256),
@@ -1872,9 +2453,9 @@ fn bin_user_acct(bin: BitArray) -> Option(UserAcct) {
       space:native-unsigned-size(64),
     >> -> {
       let assert Ok(domain) = str(domain_raw)
-      Some(UserAcct(domain, rid, space))
+      Ok(UserAcct(domain, rid, space))
     }
-    _ -> None
+    _ -> Error(Nil)
   }
 }
 
@@ -1884,18 +2465,18 @@ fn bin_user_accts_impl(
   acc: List(UserAcct),
   n: Int,
   bin: BitArray,
-) -> Option(List(UserAcct)) {
+) -> Result(List(UserAcct), Nil) {
   case n, bin {
-    0, <<>> -> Some(acc)
+    0, <<>> -> Ok(acc)
     _, <<user_acct_bin:bytes-size(sizeof_zfs_useracct_t), rest:bytes>> -> {
-      use user_acct <- option.then(bin_user_acct(user_acct_bin))
+      use user_acct <- result.try(bin_user_acct(user_acct_bin))
       bin_user_accts_impl([user_acct, ..acc], n - 1, rest)
     }
-    _, _ -> None
+    _, _ -> Error(Nil)
   }
 }
 
-fn bin_user_accts(bin: BitArray) -> Option(List(UserAcct)) {
+fn bin_user_accts(bin: BitArray) -> Result(List(UserAcct), Nil) {
   bin_user_accts_impl([], bit_array.byte_size(bin) / sizeof_zfs_useracct_t, bin)
 }
 
@@ -1906,19 +2487,30 @@ pub fn user_space_many(
   count: Int,
   cursor: Int,
 ) -> Result(#(Int, List(UserAcct)), Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   let req =
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Uint64("cookie", cursor),
-        nvl.Uint64("objset_type", user_quota_prop_index(prop)),
-        nvl.Uint64("nvlist_dst_size", count * sizeof_zfs_useracct_t),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcCookie, int_uint64(cursor)),
+        FieldValue(ZcObjsetType, user_quota_prop_index(prop) |> int_uint64()),
+        FieldValue(ZcNvlistDstSize, int_uint64(count * sizeof_zfs_useracct_t)),
       ]),
-    ])
+      history: None,
+      src: None,
+      conf: None,
+    )
   case ioctl(hdl, ZfsIocUserSpaceMany, req) {
-    ZfsCmdRes(error: 0, msg: None, data: [packed_results, user_accts_bin]) -> {
-      let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Some(nvl.Uint64(_, cursor)) = nvl.lookup(results, "cookie")
-      let assert Some(user_accts) = bin_user_accts(user_accts_bin)
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: Some(user_accts_bin)) -> {
+      use cursor <- result.try(
+        struct_read(zfs_cmd_t(), ZcCookie, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      use user_accts <- result.try(
+        bin_user_accts(user_accts_bin)
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
       Ok(#(cursor, user_accts))
     }
     res -> Error(error(res))
@@ -1926,7 +2518,17 @@ pub fn user_space_many(
 }
 
 pub fn user_space_upgrade(hdl: Handle, name: String) -> Result(Nil, Error) {
-  ioctl_unit(hdl, ZfsIocUserSpaceUpgrade, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_unit(
+    hdl,
+    ZfsIocUserSpaceUpgrade,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub fn hold(
@@ -1935,35 +2537,81 @@ pub fn hold(
   holds: NvList,
   cleanup_fd: Option(Int),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let assert Some(packed_args) =
+    nvlist_opt([
+      Some(nvl.Nvlist("holds", holds)),
+      option.map(cleanup_fd, nvl.Int32("cleanup_fd", _)),
+    ])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_unit(
     hdl,
     ZfsIocHold,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.Nvlist("holds", holds)),
-          option.map(cleanup_fd, nvl.Int32("cleanup_fd", _)),
-        ]),
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
       ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
     ),
   )
 }
 
 pub fn release(hdl: Handle, name: String, holds: NvList) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let packed_args = nvs.pack(holds, nvs.Native)
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_unit(
     hdl,
     ZfsIocRelease,
-    ZfsCmdReq(Some(name), data: [nvs.pack(holds, nvs.Native)]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
+      ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
+    ),
   )
 }
 
 pub fn get_holds(hdl: Handle, name: String) -> Result(NvList, Error) {
-  ioctl_nvlist(hdl, ZfsIocGetHolds, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_nvlist(
+    hdl,
+    ZfsIocGetHolds,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(128 * 1024)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub fn objset_recvd_props(hdl: Handle, name: String) -> Result(NvList, Error) {
-  ioctl_nvlist(hdl, ZfsIocObjsetRecvdProps, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_nvlist(
+    hdl,
+    ZfsIocObjsetRecvdProps,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(256 * 1024)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub type VdevSplitFlag {
@@ -1986,22 +2634,25 @@ pub fn vdev_split(
   props: Option(NvList),
   flags: List(VdevSplitFlag),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  use string_field <- result.try(zfs_cmd_string_field(ZcString, newname))
   ioctl_unit(
     hdl,
     ZfsIocVdevSplit,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.String("string", newname)),
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          Some(string_field),
           case vdev_split_flags_int(flags) {
             0 -> None
-            flags_int -> Some(nvl.Uint64("cookie", flags_int))
+            flags_int -> Some(FieldValue(ZcCookie, int_uint64(flags_int)))
           },
         ]),
-        Some(nvs.pack(conf, nvs.Native)),
-        option.map(props, nvs.pack(_, nvs.Native)),
-      ]),
+      ),
+      history: None,
+      src: option.map(props, nvs.pack(_, nvs.Native)),
+      conf: Some(nvs.pack(conf, nvs.Native)),
     ),
   )
 }
@@ -2011,17 +2662,25 @@ pub fn next_obj(
   name: String,
   obj: Int,
 ) -> Result(Option(Int), Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   let req =
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("obj", obj)]),
-    ])
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcObj, int_uint64(obj)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
   case ioctl(hdl, ZfsIocNextObj, req) {
-    ZfsCmdRes(error: 0, msg: None, data: []) -> Ok(None)
-    ZfsCmdRes(error: 0, msg: None, data: [packed_results]) -> {
-      let assert Ok(#(results, <<>>)) = nvs.unpack(packed_results)
-      let assert Some(nvl.Uint64(_, next)) = nvl.lookup(results, "obj")
-      Ok(Some(next))
-    }
+    ZfsCmdRes(zc: _, error: error, message: None, dst: None) if error == esrch ->
+      Ok(None)
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: None) ->
+      struct_read(zfs_cmd_t(), ZcObj, zc)
+      |> uint64_int()
+      |> result.map(Some)
+      |> result.replace_error(ErrorWithZfsCmd(zc))
     res -> Error(error(res))
   }
 }
@@ -2032,15 +2691,21 @@ pub fn diff(
   from: String,
   fd: Int,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, to))
+  use value_field <- result.try(zfs_cmd_string_field(ZcValue, from))
   ioctl_unit(
     hdl,
     ZfsIocDiff,
-    ZfsCmdReq(Some(to), data: [
-      nvlist([
-        nvl.String("value", from),
-        nvl.Uint64("cookie", fd),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        value_field,
+        FieldValue(ZcCookie, int_uint64(fd)),
       ]),
-    ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
   )
 }
 
@@ -2050,22 +2715,33 @@ pub fn tmp_snapshot(
   prefix: String,
   cleanup_fd: Int,
 ) -> Result(String, Error) {
-  use results <- result.try(ioctl_nvlist(
-    hdl,
-    ZfsIocTmpSnapshot,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.String("value", prefix), nvl.Int32("cleanup_fd", cleanup_fd)]),
-    ]),
-  ))
-  let assert Some(nvl.String(_, snapname)) = nvl.lookup(results, "value")
-  Ok(snapname)
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  use value_field <- result.try(zfs_cmd_string_field(ZcValue, prefix))
+  let req =
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        value_field,
+        FieldValue(ZcCleanupFd, int_int32(cleanup_fd)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
+  case ioctl(hdl, ZfsIocTmpSnapshot, req) {
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: None) ->
+      struct_read(zfs_cmd_t(), ZcValue, zc)
+      |> str()
+      |> result.replace_error(ErrorWithZfsCmd(zc))
+    res -> Error(error(res))
+  }
 }
 
 pub type Stat {
   Stat(gen: Int, mode: Int, links: Int, ctime: #(Int, Int))
 }
 
-fn bin_stat(bin: BitArray) -> Option(Stat) {
+fn bin_stat(bin: BitArray) -> Result(Stat, Nil) {
   case bin {
     <<
       gen:native-unsigned-size(64),
@@ -2073,8 +2749,8 @@ fn bin_stat(bin: BitArray) -> Option(Stat) {
       links:native-unsigned-size(64),
       ctime0:native-unsigned-size(64),
       ctime1:native-unsigned-size(64),
-    >> -> Some(Stat(gen, mode, links, #(ctime0, ctime1)))
-    _ -> None
+    >> -> Ok(Stat(gen, mode, links, #(ctime0, ctime1)))
+    _ -> Error(Nil)
   }
 }
 
@@ -2083,17 +2759,34 @@ pub fn obj_to_stats(
   name: String,
   obj: Int,
 ) -> Result(#(String, Stat), Error) {
-  use results <- result.try(ioctl_nvlist(
-    hdl,
-    ZfsIocObjToStats,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("obj", obj)]),
-    ]),
-  ))
-  let assert Some(nvl.String(_, path)) = nvl.lookup(results, "value")
-  let assert Some(nvl.ByteArray(_, stat_bin)) = nvl.lookup(results, "stat")
-  let assert Some(stat) = bin_stat(stat_bin)
-  Ok(#(path, stat))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let req =
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcObj, int_uint64(obj)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
+  case ioctl(hdl, ZfsIocObjToStats, req) {
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: None) -> {
+      let t = zfs_cmd_t()
+      use path <- result.try(
+        struct_read(t, ZcValue, zc)
+        |> str()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      use stat <- result.try(
+        struct_read(t, ZcStat, zc)
+        |> bin_stat()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      Ok(#(path, stat))
+    }
+    res -> Error(error(res))
+  }
 }
 
 pub fn space_written(
@@ -2101,19 +2794,40 @@ pub fn space_written(
   name: String,
   snap: String,
 ) -> Result(#(Int, Int, Int), Error) {
-  use results <- result.try(ioctl_nvlist(
-    hdl,
-    ZfsIocSpaceWritten,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.String("value", snap)]),
-    ]),
-  ))
-  let assert Some(nvl.Uint64(_, used)) = nvl.lookup(results, "cookie")
-  let assert Some(nvl.Uint64(_, compressed)) =
-    nvl.lookup(results, "objset_type")
-  let assert Some(nvl.Uint64(_, uncompressed)) =
-    nvl.lookup(results, "perm_action")
-  Ok(#(used, compressed, uncompressed))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  use value_field <- result.try(zfs_cmd_string_field(ZcValue, snap))
+  let req =
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        value_field,
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
+  case ioctl(hdl, ZfsIocSpaceWritten, req) {
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: None) -> {
+      let t = zfs_cmd_t()
+      use used <- result.try(
+        struct_read(t, ZcCookie, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      use compressed <- result.try(
+        struct_read(t, ZcObjsetType, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      use uncompressed <- result.try(
+        struct_read(t, ZcPermAction, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      Ok(#(used, compressed, uncompressed))
+    }
+    res -> Error(error(res))
+  }
 }
 
 pub fn space_snaps(
@@ -2121,10 +2835,22 @@ pub fn space_snaps(
   name: String,
   firstsnap: String,
 ) -> Result(NvList, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let packed_args = nvlist([nvl.String("firstsnap", firstsnap)])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_nvlist(
     hdl,
     ZfsIocSpaceSnaps,
-    ZfsCmdReq(Some(name), data: [nvlist([nvl.String("firstsnap", firstsnap)])]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
+      ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
+    ),
   )
 }
 
@@ -2134,17 +2860,25 @@ pub fn destroy_snaps(
   snaps: NvList,
   defer: Bool,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let assert Some(packed_args) =
+    nvlist_opt([
+      Some(nvl.Nvlist("snaps", snaps)),
+      opt(defer, nvl.Boolean("defer")),
+    ])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_unit(
     hdl,
     ZfsIocDestroySnaps,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.Nvlist("snaps", snaps)),
-          opt(defer, nvl.Boolean("defer")),
-        ]),
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
       ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
     ),
   )
 }
@@ -2154,16 +2888,20 @@ pub fn pool_reguid(
   name: String,
   guid: Option(Int),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocPoolReguid,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          option.map(guid, nvl.Uint64("guid", _)),
+      zc: build_zfs_cmd(
+        option.values([
+          Some(name_field),
+          option.map(guid, fn(guid) { FieldValue(ZcGuid, int_uint64(guid)) }),
         ]),
-      ]),
+      ),
+      history: None,
+      src: None,
+      conf: None,
     ),
   )
 }
@@ -2173,16 +2911,17 @@ pub fn pool_reopen(
   name: String,
   scrub_restart: Bool,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocPoolReopen,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          opt(scrub_restart, nvl.BooleanValue("scrub_restart", True)),
-        ]),
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: nvlist_opt([
+        opt(scrub_restart, nvl.BooleanValue("scrub_restart", True)),
       ]),
+      conf: None,
     ),
   )
 }
@@ -2192,23 +2931,46 @@ pub fn send_progress(
   name: String,
   fd: Int,
 ) -> Result(#(Int, Int), Error) {
-  use results <- result.try(ioctl_nvlist(
-    hdl,
-    ZfsIocSendProgress,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("cookie", fd)]),
-    ]),
-  ))
-  let assert Some(nvl.Uint64(_, written)) = nvl.lookup(results, "cookie")
-  let assert Some(nvl.Uint64(_, traversed)) = nvl.lookup(results, "objset_type")
-  Ok(#(written, traversed))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let req =
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcCookie, int_uint64(fd)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    )
+  case ioctl(hdl, ZfsIocSendProgress, req) {
+    ZfsCmdRes(zc: zc, error: 0, message: None, dst: None) -> {
+      let t = zfs_cmd_t()
+      use written <- result.try(
+        struct_read(t, ZcCookie, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      use traversed <- result.try(
+        struct_read(t, ZcObjsetType, zc)
+        |> uint64_int()
+        |> result.replace_error(ErrorWithZfsCmd(zc)),
+      )
+      Ok(#(written, traversed))
+    }
+    res -> Error(error(res))
+  }
 }
 
 pub fn log_history(hdl: Handle, message: String) -> Result(Nil, Error) {
   ioctl_unit(
     hdl,
     ZfsIocLogHistory,
-    ZfsCmdReq(None, data: [nvlist([nvl.String("message", message)])]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([]),
+      history: None,
+      src: Some(nvlist([nvl.String("message", message)])),
+      conf: None,
+    ),
   )
 }
 
@@ -2217,10 +2979,16 @@ pub fn send_new(
   tosnap: String,
   args: NvList,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, tosnap))
   ioctl_unit(
     hdl,
     ZfsIocSendNew,
-    ZfsCmdReq(Some(tosnap), data: [nvs.pack(args, nvs.Native)]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: Some(nvs.pack(args, nvs.Native)),
+      conf: None,
+    ),
   )
 }
 
@@ -2229,12 +2997,24 @@ pub fn send_space(
   tosnap: String,
   args: Option(NvList),
 ) -> Result(NvList, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, tosnap))
+  let opt_packed_args = option.map(args, nvs.pack(_, nvs.Native))
+  let packed_args_size = case opt_packed_args {
+    Some(packed_args) -> bit_array.byte_size(packed_args)
+    None -> 0
+  }
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_nvlist(
     hdl,
     ZfsIocSendSpace,
     ZfsCmdReq(
-      Some(tosnap),
-      data: option.values([option.map(args, nvs.pack(_, nvs.Native))]),
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
+      ]),
+      history: None,
+      src: opt_packed_args,
+      conf: None,
     ),
   )
 }
@@ -2246,18 +3026,26 @@ pub fn clone(
   props: Option(NvList),
   hidden_args: Option(NvList),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let assert Some(packed_args) =
+    nvlist_opt([
+      Some(nvl.String("origin", origin)),
+      option.map(props, nvl.Nvlist("props", _)),
+      option.map(hidden_args, nvl.Nvlist("hidden_args", _)),
+    ])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_unit(
     hdl,
     ZfsIocClone,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.String("origin", origin)),
-          option.map(props, nvl.Nvlist("props", _)),
-          option.map(hidden_args, nvl.Nvlist("hidden_args", _)),
-        ]),
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
       ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
     ),
   )
 }
@@ -2267,10 +3055,22 @@ pub fn bookmark(
   name: String,
   bookmarks: NvList,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let packed_bookmarks = nvs.pack(bookmarks, nvs.Native)
+  let packed_bookmarks_size = bit_array.byte_size(packed_bookmarks)
+  let dst_size = int.max(128 * 1024, packed_bookmarks_size * 2)
   ioctl_unit(
     hdl,
     ZfsIocBookmark,
-    ZfsCmdReq(Some(name), data: [nvs.pack(bookmarks, nvs.Native)]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
+      ]),
+      history: None,
+      src: Some(packed_bookmarks),
+      conf: None,
+    ),
   )
 }
 
@@ -2279,14 +3079,24 @@ pub fn get_bookmarks(
   name: String,
   props: Option(NvList),
 ) -> Result(NvList, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let opt_packed_args = option.map(props, nvs.pack(_, nvs.Native))
+  let packed_args_size = case opt_packed_args {
+    Some(packed_args) -> bit_array.byte_size(packed_args)
+    None -> 0
+  }
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_nvlist(
     hdl,
     ZfsIocGetBookmarks,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        option.map(props, nvs.pack(_, nvs.Native)),
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
       ]),
+      history: None,
+      src: opt_packed_args,
+      conf: None,
     ),
   )
 }
@@ -2296,12 +3106,22 @@ pub fn destroy_bookmarks(
   name: String,
   list: NvList,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let packed_list = nvs.pack(list, nvs.Native)
+  let packed_list_size = bit_array.byte_size(packed_list)
+  let dst_size = int.max(128 * 1024, packed_list_size * 2)
   ioctl_unit(
     hdl,
     ZfsIocDestroyBookmarks,
-    ZfsCmdReq(Some(name), data: [
-      nvs.pack(list, nvs.Native),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
+      ]),
+      history: None,
+      src: Some(packed_list),
+      conf: None,
+    ),
   )
 }
 
@@ -2310,20 +3130,36 @@ pub fn recv_new(
   name: String,
   args: NvList,
 ) -> Result(NvList, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let packed_args = nvs.pack(args, nvs.Native)
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_nvlist(
     hdl,
     ZfsIocRecvNew,
-    ZfsCmdReq(Some(name), data: [
-      nvs.pack(args, nvs.Native),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
+      ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
+    ),
   )
 }
 
 pub fn pool_sync(hdl: Handle, name: String, force: Bool) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocPoolSync,
-    ZfsCmdReq(Some(name), data: [nvlist([nvl.BooleanValue("force", force)])]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: Some(nvlist([nvl.BooleanValue("force", force)])),
+      conf: None,
+    ),
   )
 }
 
@@ -2333,13 +3169,19 @@ pub fn channel_program(
   args: NvList,
   memlimit: Int,
 ) -> Result(NvList, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_nvlist(
     hdl,
     ZfsIocChannelProgram,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("nvlist_dst_size", memlimit)]),
-      nvs.pack(args, nvs.Native),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(memlimit)),
+      ]),
+      history: None,
+      src: Some(nvs.pack(args, nvs.Native)),
+      conf: None,
+    ),
   )
 }
 
@@ -2349,23 +3191,34 @@ pub fn load_key(
   hidden_args: NvList,
   noop: Bool,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocLoadKey,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.Nvlist("hidden_args", hidden_args)),
-          opt(noop, nvl.Boolean("noop")),
-        ]),
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: nvlist_opt([
+        Some(nvl.Nvlist("hidden_args", hidden_args)),
+        opt(noop, nvl.Boolean("noop")),
       ]),
+      conf: None,
     ),
   )
 }
 
 pub fn unload_key(hdl: Handle, name: String) -> Result(Nil, Error) {
-  ioctl_unit(hdl, ZfsIocUnloadKey, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_unit(
+    hdl,
+    ZfsIocUnloadKey,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub fn change_key(
@@ -2375,31 +3228,52 @@ pub fn change_key(
   hidden_args: Option(NvList),
   props: Option(NvList),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocChangeKey,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          option.map(crypt_cmd, nvl.Uint64("crypt_cmd", _)),
-          option.map(hidden_args, nvl.Nvlist("hidden_args", _)),
-          option.map(props, nvl.Nvlist("props", _)),
-        ]),
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: nvlist_opt([
+        option.map(crypt_cmd, nvl.Uint64("crypt_cmd", _)),
+        option.map(hidden_args, nvl.Nvlist("hidden_args", _)),
+        option.map(props, nvl.Nvlist("props", _)),
       ]),
+      conf: None,
     ),
   )
 }
 
 pub fn pool_checkpoint(hdl: Handle, name: String) -> Result(Nil, Error) {
-  ioctl_unit(hdl, ZfsIocPoolCheckpoint, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_unit(
+    hdl,
+    ZfsIocPoolCheckpoint,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub fn pool_discard_checkpoint(
   hdl: Handle,
   name: String,
 ) -> Result(Nil, Error) {
-  ioctl_unit(hdl, ZfsIocPoolDiscardCheckpoint, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_unit(
+    hdl,
+    ZfsIocPoolDiscardCheckpoint,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub type PoolInitializeFunc {
@@ -2424,17 +3298,28 @@ pub fn pool_initialize(
   command: PoolInitializeFunc,
   vdevs: NvList,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let packed_args =
+    nvlist([
+      nvl.Uint64("initialize_command", pool_initialize_func_index(command)),
+      nvl.Nvlist("initialize_vdevs", vdevs),
+    ])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   // XXX: This ioctl is bugged and returns an nvlist for errors in success.
   result.replace(
     ioctl_nvlist(
       hdl,
       ZfsIocPoolInitialize,
-      ZfsCmdReq(Some(name), data: [
-        nvlist([
-          nvl.Uint64("initialize_command", pool_initialize_func_index(command)),
-          nvl.Nvlist("initialize_vdevs", vdevs),
+      ZfsCmdReq(
+        zc: build_zfs_cmd([
+          name_field,
+          FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
         ]),
-      ]),
+        history: None,
+        src: Some(packed_args),
+        conf: None,
+      ),
     ),
     Nil,
   )
@@ -2462,21 +3347,29 @@ pub fn pool_trim(
   rate: Option(Int),
   secure: Option(Bool),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let assert Some(packed_args) =
+    nvlist_opt([
+      Some(nvl.Uint64("trim_command", pool_trim_func_index(command))),
+      Some(nvl.Nvlist("trim_vdevs", vdevs)),
+      option.map(rate, nvl.Uint64("trim_rate", _)),
+      option.map(secure, nvl.BooleanValue("trim_secure", _)),
+    ])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   // XXX: This ioctl is bugged and returns an nvlist for errors in success.
   result.replace(
     ioctl_nvlist(
       hdl,
       ZfsIocPoolTrim,
       ZfsCmdReq(
-        Some(name),
-        data: option.values([
-          nvlist_opt([
-            Some(nvl.Uint64("trim_command", pool_trim_func_index(command))),
-            Some(nvl.Nvlist("trim_vdevs", vdevs)),
-            option.map(rate, nvl.Uint64("trim_rate", _)),
-            option.map(secure, nvl.BooleanValue("trim_secure", _)),
-          ]),
+        zc: build_zfs_cmd([
+          name_field,
+          FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
         ]),
+        history: None,
+        src: Some(packed_args),
+        conf: None,
       ),
     ),
     Nil,
@@ -2489,20 +3382,39 @@ pub fn redact(
   bookname: String,
   snaps: NvList,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocRedact,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.String("bookname", bookname),
-        nvl.Nvlist("snapnv", snaps),
-      ]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: Some(
+        nvlist([
+          nvl.String("bookname", bookname),
+          nvl.Nvlist("snapnv", snaps),
+        ]),
+      ),
+      conf: None,
+    ),
   )
 }
 
 pub fn get_bookmark_props(hdl: Handle, name: String) -> Result(NvList, Error) {
-  ioctl_nvlist(hdl, ZfsIocGetBookmarkProps, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_nvlist(
+    hdl,
+    ZfsIocGetBookmarkProps,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(128 * 1024)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }
 
 pub type ZpoolWaitActivity {
@@ -2537,17 +3449,25 @@ pub fn wait(
   activity: ZpoolWaitActivity,
   tag: Option(Int),
 ) -> Result(NvList, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let assert Some(packed_args) =
+    nvlist_opt([
+      Some(nvl.Int32("wait_activity", zpool_wait_activity_index(activity))),
+      option.map(tag, nvl.Uint64("wait_tag", _)),
+    ])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_nvlist(
     hdl,
     ZfsIocWait,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.Int32("wait_activity", zpool_wait_activity_index(activity))),
-          option.map(tag, nvl.Uint64("wait_tag", _)),
-        ]),
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
       ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
     ),
   )
 }
@@ -2567,12 +3487,25 @@ pub fn wait_fs(
   name: String,
   activity: ZfsWaitActivity,
 ) -> Result(NvList, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let packed_args =
+    nvlist([
+      nvl.Int32("wait_activity", zfs_wait_activity_index(activity)),
+    ])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_nvlist(
     hdl,
     ZfsIocWaitFs,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Int32("wait_activity", zfs_wait_activity_index(activity))]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
+      ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
+    ),
   )
 }
 
@@ -2582,17 +3515,25 @@ pub fn vdev_get_props(
   vdev: Int,
   props: Option(NvList),
 ) -> Result(NvList, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let assert Some(packed_args) =
+    nvlist_opt([
+      Some(nvl.Uint64("vdevprops_get_vdev", vdev)),
+      option.map(props, nvl.Nvlist("vdevprops_get_props", _)),
+    ])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_nvlist(
     hdl,
     ZfsIocVdevGetProps,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.Uint64("vdevprops_get_vdev", vdev)),
-          option.map(props, nvl.Nvlist("vdevprops_get_props", _)),
-        ]),
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
       ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
     ),
   )
 }
@@ -2603,15 +3544,26 @@ pub fn vdev_set_props(
   vdev: Int,
   props: NvList,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  let packed_args =
+    nvlist([
+      nvl.Uint64("vdevprops_set_vdev", vdev),
+      nvl.Nvlist("vdevprops_set_props", props),
+    ])
+  let packed_args_size = bit_array.byte_size(packed_args)
+  let dst_size = int.max(128 * 1024, packed_args_size * 2)
   ioctl_unit(
     hdl,
     ZfsIocVdevSetProps,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Uint64("vdevprops_set_vdev", vdev),
-        nvl.Nvlist("vdevprops_set_props", props),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(dst_size)),
       ]),
-    ]),
+      history: None,
+      src: Some(packed_args),
+      conf: None,
+    ),
   )
 }
 
@@ -2623,19 +3575,20 @@ pub fn pool_scrub(
   date_start: Option(Int),
   date_end: Option(Int),
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocPoolScrub,
     ZfsCmdReq(
-      Some(name),
-      data: option.values([
-        nvlist_opt([
-          Some(nvl.Uint64("scan_type", scan_func_index(scan_type))),
-          Some(nvl.Uint64("scan_command", scrub_cmd_index(scan_command))),
-          option.map(date_start, nvl.Uint64("scan_date_start", _)),
-          option.map(date_end, nvl.Uint64("scan_date_end", _)),
-        ]),
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: nvlist_opt([
+        Some(nvl.Uint64("scan_type", scan_func_index(scan_type))),
+        Some(nvl.Uint64("scan_command", scrub_cmd_index(scan_command))),
+        option.map(date_start, nvl.Uint64("scan_date_start", _)),
+        option.map(date_end, nvl.Uint64("scan_date_end", _)),
       ]),
+      conf: None,
     ),
   )
 }
@@ -2659,12 +3612,20 @@ pub fn pool_prefetch(
   name: String,
   prefetch: ZpoolPrefetchType,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocPoolPrefetch,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Int32("prefetch_type", zpool_prefetch_type_index(prefetch))]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: Some(
+        nvlist([
+          nvl.Int32("prefetch_type", zpool_prefetch_type_index(prefetch)),
+        ]),
+      ),
+      conf: None,
+    ),
   )
 }
 
@@ -2688,15 +3649,21 @@ pub fn ddt_prune(
   unit: ZpoolDdtPruneUnit,
   amount: Int,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocDdtPrune,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([
-        nvl.Int32("ddt_prune_unit", zpool_ddt_prune_unit_index(unit)),
-        nvl.Uint64("ddt_prune_amount", amount),
-      ]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: Some(
+        nvlist([
+          nvl.Int32("ddt_prune_unit", zpool_ddt_prune_unit_index(unit)),
+          nvl.Uint64("ddt_prune_amount", amount),
+        ]),
+      ),
+      conf: None,
+    ),
   )
 }
 
@@ -2709,33 +3676,46 @@ pub fn nextboot(
   ioctl_unit(
     hdl,
     ZfsIocNextBoot,
-    ZfsCmdReq(None, data: [
-      nvlist([
-        nvl.String("command", command),
-        nvl.Uint64("pool_guid", pool_guid),
-        nvl.Uint64("guid", guid),
-      ]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([]),
+      history: None,
+      src: Some(
+        nvlist([
+          nvl.String("command", command),
+          nvl.Uint64("pool_guid", pool_guid),
+          nvl.Uint64("guid", guid),
+        ]),
+      ),
+      conf: None,
+    ),
   )
 }
 
 pub fn jail(hdl: Handle, name: String, jid: Int) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocJail,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("zoneid", jid)]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: Some(nvlist([nvl.Uint64("zoneid", jid)])),
+      conf: None,
+    ),
   )
 }
 
 pub fn unjail(hdl: Handle, name: String, jid: Int) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocUnjail,
-    ZfsCmdReq(Some(name), data: [
-      nvlist([nvl.Uint64("zoneid", jid)]),
-    ]),
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: Some(nvlist([nvl.Uint64("zoneid", jid)])),
+      conf: None,
+    ),
   )
 }
 
@@ -2749,22 +3729,39 @@ pub fn set_boot_env(
   name: String,
   config: BootEnvConfig,
 ) -> Result(Nil, Error) {
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
   ioctl_unit(
     hdl,
     ZfsIocSetBootEnv,
-    ZfsCmdReq(Some(name), data: [
-      case config {
+    ZfsCmdReq(
+      zc: build_zfs_cmd([name_field]),
+      history: None,
+      src: Some(case config {
         BootEnvRaw(grub_envmap) ->
           nvlist([
             nvl.Uint64("version", 0),
             nvl.String("grub:envmap", grub_envmap),
           ])
         BootEnvNvlist(cfg) -> nvs.pack(cfg, nvs.Native)
-      },
-    ]),
+      }),
+      conf: None,
+    ),
   )
 }
 
 pub fn get_boot_env(hdl: Handle, name: String) -> Result(NvList, Error) {
-  ioctl_nvlist(hdl, ZfsIocGetBootEnv, ZfsCmdReq(Some(name), []))
+  use name_field <- result.try(zfs_cmd_string_field(ZcName, name))
+  ioctl_nvlist(
+    hdl,
+    ZfsIocGetBootEnv,
+    ZfsCmdReq(
+      zc: build_zfs_cmd([
+        name_field,
+        FieldValue(ZcNvlistDstSize, int_uint64(128 * 1024)),
+      ]),
+      history: None,
+      src: None,
+      conf: None,
+    ),
+  )
 }

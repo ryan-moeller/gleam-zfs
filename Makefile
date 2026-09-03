@@ -4,7 +4,7 @@
 CC	=	cc
 #CFLAGS	=	-O2 -Wall -fPIC -pthread -std=c23
 CFLAGS	=	-O0 -g -Wall -Werror -fPIC -pthread -std=c23
-LDFLAGS	=	-Bmold -shared -lnvpair
+LDFLAGS	=	-Bmold -shared
 
 SRCTOP	:=	/usr/src
 ZFSTOP	:=	$(SRCTOP)/sys/contrib/openzfs
