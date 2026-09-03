@@ -9,7 +9,7 @@ repository = { type = "github", user = "ryan-moeller", repo = "gleam-zfs" }
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
 nvpair = {
   git = "https://github.com/ryan-moeller/gleam-nvpair",
-  ref = "6079a71b4390d33396a2e27ce274b03504930227"
+  ref = "265fa0b7009de487e916109862c013486fe3dfeb"
 }
 gleam_erlang = ">= 1.3.0 and < 2.0.0"
 
