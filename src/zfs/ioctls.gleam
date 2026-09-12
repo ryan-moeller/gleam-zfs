@@ -75,9 +75,6 @@ pub fn close_handle(hdl: Handle) -> Bool {
   port_close(hdl.inner)
 }
 
-@external(erlang, "erlang", "port_call")
-fn port_call(port: Port, op: Int, data: t1) -> t2
-
 pub type ZfsCmd =
   StructStorage
 
@@ -555,9 +552,11 @@ type ZfsCmdRes {
   )
 }
 
+@external(erlang, "devzfs", "ioctl")
+fn devzfs_ioctl(port: Port, ioc: Int, req: ZfsCmdReq) -> ZfsCmdRes
+
 fn ioctl(hdl: Handle, ioc: ZfsIoc, req: ZfsCmdReq) -> ZfsCmdRes {
-  let assert Ok(res) = port_call(hdl.inner, zfsioc_index(ioc), req)
-  res
+  devzfs_ioctl(hdl.inner, zfsioc_index(ioc), req)
 }
 
 fn error(res: ZfsCmdRes) -> Error {

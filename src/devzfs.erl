@@ -11,7 +11,7 @@ for invoking OpenZFS ioctls on FreeBSD.
 
 %% API --------------------------------------------------------------------
 
--export([open/0]).
+-export([open/0, ioctl/3]).
 
 open() ->
 	SharedLib = zfs_drv,
@@ -21,3 +21,10 @@ open() ->
 		_ -> exit({error, could_not_load_driver})
 	end,
 	open_port({spawn, SharedLib}, []).
+
+ioctl(Port, Ioc, Req) ->
+	Ref = make_ref(),
+	true = port_command(Port, term_to_binary({Ref, Ioc, Req})),
+	receive
+		{Ref, Res} -> Res
+	end.
