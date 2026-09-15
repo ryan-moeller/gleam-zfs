@@ -1096,7 +1096,7 @@ fn vdev_state_index(state: VdevState) -> Int {
     VdevStateCantOpen -> 4
     VdevStateFaulted -> 5
     VdevStateDegraded -> 6
-    VdevStateHealthy -> 6
+    VdevStateHealthy -> 7
   }
 }
 
