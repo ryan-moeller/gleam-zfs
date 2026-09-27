@@ -137,17 +137,6 @@ _zfs_fatal(ZfsRequest *req, const char *func, int line)
 
 #define zfs_fatal(req) _zfs_fatal((req), __func__, __LINE__)
 
-static void
-zfs_unit(ZfsRequest *req, int error, const char *fmt, ...)
-{
-	va_list ap;
-
-	va_start(ap, fmt);
-	encode_zfs_cmd_res_headerv(req, error, fmt, ap);
-	va_end(ap);
-	encode_none(&req->res);
-}
-
 static ErlDrvData
 zfs_start(ErlDrvPort port, char *command __unused)
 {
@@ -172,16 +161,16 @@ zfs_stop(ErlDrvData drv_data)
 }
 
 static int
-zfs_ioctl(ZfsState *zfs, unsigned long request, zfs_cmd_t *zc)
+zfs_ioctl(ZfsRequest *req)
 {
 	zfs_iocparm_t zp;
-	size_t oldsize;
+	zfs_cmd_t *zc = &req->zc;
+	size_t oldsize = zc->zc_nvlist_dst_size;
 
-	oldsize = zc->zc_nvlist_dst_size;
 	zp.zfs_cmd = (uint64_t)(uintptr_t)zc;
 	zp.zfs_cmd_size = sizeof (zfs_cmd_t);
 	zp.zfs_ioctl_version = ZFS_IOCVER_OZFS;
-	if (ioctl(zfs->fd, _IOWR('Z', request, zfs_iocparm_t), &zp) != 0)
+	if (ioctl(req->zfs->fd, _IOWR('Z', req->ioc, zfs_iocparm_t), &zp) != 0)
 		return errno;
 	if (oldsize < zc->zc_nvlist_dst_size)
 		return ENOMEM;
@@ -309,12 +298,19 @@ zfs_output(ErlDrvData drv_data, char *buf, ErlDrvSizeT len)
 		return zfs_fatal(req);
 }
 
-#define zfs_success(req) ({ \
-	zfs_unit((req), 0, NULL); \
-})
-#define zfs_error(req, error, fmt, ...) ({ \
-	zfs_unit((req), (error), (fmt), __VA_ARGS__); \
-})
+static void
+zfs_unit(ZfsRequest *req, int error, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	encode_zfs_cmd_res_headerv(req, error, fmt, ap);
+	va_end(ap);
+	encode_none(&req->res);
+}
+
+#define zfs_success(req) zfs_unit((req), 0, NULL)
+#define zfs_error(req, err, fmt, ...) zfs_unit((req), (err), (fmt), __VA_ARGS__)
 
 /* Allocate/resize the result buffer. */
 static inline ErlDrvBinary *
@@ -341,15 +337,15 @@ zfs_result(ZfsRequest *req, ErlDrvBinary *result, int error)
 	driver_free_binary(result);
 }
 
-#define zfs_ioctl_checked(ioc, ...) ({ \
-	if ((error = zfs_ioctl(req->zfs, (ioc), zc)) != 0) { \
+#define zfs_ioctl_checked(...) ({ \
+	if ((error = zfs_ioctl(req)) != 0) { \
 		__VA_ARGS__; \
 		return zfs_error(req, error, "ioctl(%s) failed", ZFS_DEV); \
 	} \
 })
 
-#define zfs_ioctl_resize_checked(ioc, ...) ({ \
-	while ((error = zfs_ioctl(req->zfs, (ioc), zc)) == ENOMEM) { \
+#define zfs_ioctl_resize_checked(...) ({ \
+	while ((error = zfs_ioctl(req)) == ENOMEM) { \
 		__VA_ARGS__; \
 		assert(zc->zc_nvlist_dst_size > result->orig_size); \
 		result = realloc_result(result, zc); \
@@ -366,10 +362,9 @@ zfs_result(ZfsRequest *req, ErlDrvBinary *result, int error)
 static inline void
 zfs_ioctl_unit(ZfsRequest *req)
 {
-	zfs_cmd_t *zc = &req->zc;
 	int error;
 
-	zfs_ioctl_checked(req->ioc);
+	zfs_ioctl_checked();
 	zfs_success(req);
 }
 
@@ -382,7 +377,7 @@ zfs_ioctl_nvlist(ZfsRequest *req)
 	int error;
 
 	result = realloc_result(result, zc);
-	zfs_ioctl_resize_checked(req->ioc);
+	zfs_ioctl_resize_checked();
 	if (zc->zc_nvlist_dst_filled)
 		return zfs_result(req, result, error);
 	driver_free_binary(result);
@@ -398,7 +393,7 @@ zfs_ioctl_pool_configs(ZfsRequest *req)
 	int error;
 
 	result = realloc_result(result, zc);
-	zfs_ioctl_resize_checked(req->ioc, ({
+	zfs_ioctl_resize_checked(({
 		zc->zc_cookie = gen; /* reset gen */
 	}));
 	if (zc->zc_nvlist_dst_filled)
@@ -426,7 +421,7 @@ zfs_ioctl_pool_get_history(ZfsRequest *req)
 	/* Reserve leading space for offset. */
 	zc->zc_history_len -= sizeof (uint64_t);
 	zc->zc_history += sizeof (uint64_t);
-	zfs_ioctl_checked(req->ioc, ({
+	zfs_ioctl_checked(({
 		driver_free_binary(result);
 	}));
 	/* Fill in offset. */
@@ -453,7 +448,7 @@ zfs_ioctl_userspace_many(ZfsRequest *req)
 	int error;
 
 	result = realloc_result(result, zc);
-	zfs_ioctl_resize_checked(req->ioc);
+	zfs_ioctl_resize_checked();
 	zfs_result(req, result, error);
 }
 
@@ -469,7 +464,7 @@ zfs_ioctl_list_next(ZfsRequest *req)
 	if (!zc->zc_simple)
 		result = realloc_result(result, zc);
 	strlcpy(name, zc->zc_name, sizeof name);
-	while ((error = zfs_ioctl(req->zfs, req->ioc, zc)) == ENOMEM) {
+	while ((error = zfs_ioctl(req)) == ENOMEM) {
 		if (zc->zc_simple)
 			break;
 		assert(zc->zc_nvlist_dst_size > result->orig_size);
@@ -497,7 +492,7 @@ zfs_ioctl_error_log(ZfsRequest *req)
 	    count * sizeof (zbookmark_phys_t));
 	assert(result != NULL); /* XXX */
 	zc->zc_nvlist_dst = (uint64_t)(uintptr_t)&result->orig_bytes[0];
-	zfs_ioctl_resize_checked(req->ioc, ({
+	zfs_ioctl_resize_checked(({
 		count *= 2;
 		result = driver_realloc_binary(result,
 		    count * sizeof (zbookmark_phys_t));
@@ -526,10 +521,9 @@ zfs_ioctl_error_log(ZfsRequest *req)
 static inline void
 zfs_ioctl_sentinel(ZfsRequest *req, int sentinel)
 {
-	zfs_cmd_t *zc = &req->zc;
 	int error;
 
-	zfs_ioctl_checked(req->ioc, ({
+	zfs_ioctl_checked(({
 		if (error == sentinel)
 			return zfs_unit(req, sentinel, NULL);
 	}));
@@ -544,7 +538,7 @@ zfs_ioctl_channel_program(ZfsRequest *req)
 	int error;
 
 	result = realloc_result(result, zc);
-	zfs_ioctl_checked(req->ioc, ({
+	zfs_ioctl_checked(({
 		if (zc->zc_nvlist_dst_filled)
 			return zfs_result(req, result, error);
 		driver_free_binary(result);
