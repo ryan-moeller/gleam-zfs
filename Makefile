@@ -34,8 +34,11 @@ all:	$(TARGET)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(TARGET): $(OBJS)
+$(TARGET): priv $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+
+priv:
+	mkdir priv
 
 clean:
 	rm -f $(OBJS) $(TARGET)
