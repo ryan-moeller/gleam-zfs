@@ -6,7 +6,7 @@ moment other than running some tests.
 ## Development
 
 ```sh
-pkg install erlang-runtime29 gleam
+pkg install erlang-runtime29 gleam mold
 make
 gleam test  # Run the tests (must be run as root)
 ```
