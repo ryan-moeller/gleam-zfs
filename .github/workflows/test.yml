@@ -10,14 +10,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    name: test on FreeBSD
     steps:
       - uses: actions/checkout@v6
-      - uses: erlef/setup-beam@v1
+      - uses: vmactions/freebsd-vm@v1
         with:
-          otp-version: "28"
-          gleam-version: "1.16.0"
-          rebar3-version: "3"
-          # elixir-version: "1"
-      - run: gleam deps download
-      - run: gleam test
-      - run: gleam format --check src test
+          release: "15.1"
+          cache-after-prepare: true
+          prepare: |
+            pkg install -y \
+              FreeBSD-src-sys \
+              erlang \
+              erlang-runtime29 \
+              gleam \
+              mold \
+              git
+          run: |
+            set -e
+            make
+            gleam test
+            gleam format --check src test
