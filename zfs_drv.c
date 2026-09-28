@@ -82,8 +82,7 @@ encode_some_header(ei_x_buff *x)
 }
 
 static inline void
-encode_zfs_cmd_res_headerv(ZfsRequest *req, int error, const char *fmt,
-    va_list ap)
+_encode_zfs_cmd_res_header(ZfsRequest *req, int error)
 {
 	ei_x_buff *x = &req->res;
 
@@ -92,18 +91,29 @@ encode_zfs_cmd_res_headerv(ZfsRequest *req, int error, const char *fmt,
 	ei_x_encode_atom(x, "zfs_cmd_res");
 	ei_x_encode_binary(x, &req->zc, sizeof req->zc);
 	ei_x_encode_long(x, error);
-	if (fmt == NULL)
-		encode_none(x);
-	else {
-		char msg[NL_TEXTMAX];
-		int len;
+}
 
-		len = vsnprintf(msg, sizeof msg, fmt, ap);
-		assert(len < sizeof msg);
+static inline void
+encode_zfs_cmd_res_header(ZfsRequest *req, int error)
+{
+	_encode_zfs_cmd_res_header(req, error);
+	encode_none(&req->res);
+}
 
-		encode_some_header(x);
-		ei_x_encode_binary(x, msg, len);
-	}
+static inline void
+encode_zfs_cmd_res_headerv(ZfsRequest *req, int error, const char *fmt,
+    va_list ap)
+{
+	ei_x_buff *x = &req->res;
+
+	_encode_zfs_cmd_res_header(req, error);
+
+	char msg[NL_TEXTMAX];
+	int len = vsnprintf(msg, sizeof msg, fmt, ap);
+	assert(len < sizeof msg);
+
+	encode_some_header(x);
+	ei_x_encode_binary(x, msg, len);
 }
 
 static inline ZfsRequest *
@@ -299,7 +309,16 @@ zfs_output(ErlDrvData drv_data, char *buf, ErlDrvSizeT len)
 }
 
 static void
-zfs_unit(ZfsRequest *req, int error, const char *fmt, ...)
+zfs_unit(ZfsRequest *req, int error)
+{
+	encode_zfs_cmd_res_header(req, error);
+	encode_none(&req->res);
+}
+
+#define zfs_success(req) zfs_unit((req), 0)
+
+static void
+zfs_error(ZfsRequest *req, int error, const char *fmt, ...)
 {
 	va_list ap;
 
@@ -308,9 +327,6 @@ zfs_unit(ZfsRequest *req, int error, const char *fmt, ...)
 	va_end(ap);
 	encode_none(&req->res);
 }
-
-#define zfs_success(req) zfs_unit((req), 0, NULL)
-#define zfs_error(req, err, fmt, ...) zfs_unit((req), (err), (fmt), __VA_ARGS__)
 
 /* Allocate/resize the result buffer. */
 static inline ErlDrvBinary *
@@ -329,7 +345,7 @@ zfs_result(ZfsRequest *req, ErlDrvBinary *result, int error)
 	ei_x_buff *x = &req->res;
 	zfs_cmd_t *zc = &req->zc;
 
-	encode_zfs_cmd_res_headerv(req, error, NULL, NULL);
+	encode_zfs_cmd_res_header(req, error);
 	encode_some_header(x);
 	assert(zc->zc_nvlist_dst_filled);
 	assert(zc->zc_nvlist_dst_size <= result->orig_size);
@@ -430,7 +446,7 @@ zfs_ioctl_pool_get_history(ZfsRequest *req)
 
 	ei_x_buff *x = &req->res;
 
-	encode_zfs_cmd_res_headerv(req, error, NULL, NULL);
+	encode_zfs_cmd_res_header(req, error);
 	encode_some_header(x);
 
 	assert(zc->zc_history_len <=
@@ -503,7 +519,7 @@ zfs_ioctl_error_log(ZfsRequest *req)
 
 	ei_x_buff *x = &req->res;
 
-	encode_zfs_cmd_res_headerv(req, error, NULL, NULL);
+	encode_zfs_cmd_res_header(req, error);
 	encode_some_header(x);
 
 	/*
@@ -525,7 +541,7 @@ zfs_ioctl_sentinel(ZfsRequest *req, int sentinel)
 
 	zfs_ioctl_checked(({
 		if (error == sentinel)
-			return zfs_unit(req, sentinel, NULL);
+			return zfs_unit(req, sentinel);
 	}));
 	zfs_success(req);
 }

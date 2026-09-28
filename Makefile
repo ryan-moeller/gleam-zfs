@@ -11,8 +11,11 @@ ZFSTOP	:=	$(SRCTOP)/sys/contrib/openzfs
 CFLAGS	+=	-include $(ZFSTOP)/include/os/freebsd/spl/sys/ccompile.h \
 		-I$(ZFSTOP)/include \
 		-I$(ZFSTOP)/lib/libspl/include \
-		-I$(ZFSTOP)/lib/libspl/include/os/freebsd \
-		-I$(ZFSTOP)/lib/libzpool/include
+		-I$(ZFSTOP)/lib/libspl/include/os/freebsd
+.if exists($(ZFSTOP)/lib/libzpool/include)
+CFLAGS	+=	-I$(ZFSTOP)/lib/libzpool/include
+.endif
+CFLAGS	+=	-include $(SRCTOP)/sys/modules/zfs/zfs_config.h
 
 ERLANG	:=	erlang29
 PREFIX	:=	/usr/local
