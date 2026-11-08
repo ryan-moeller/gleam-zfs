@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,7 @@ typedef struct zfs_iocparm {
 typedef struct zfs_state {
 	ErlDrvPort port;	/* owner */
 	int fd;			/* /dev/zfs file descriptor */
+	atomic_uint refs;	/* the port plus each outstanding request */
 } ZfsState;
 
 typedef struct zfs_request {
@@ -117,11 +119,46 @@ encode_zfs_cmd_res_headerv(ZfsRequest *req, int error, const char *fmt,
 	ei_x_encode_binary(x, msg, len);
 }
 
+static ZfsState *
+zfs_state_create(ErlDrvPort port)
+{
+	int fd = open(ZFS_DEV, O_RDWR | O_CLOEXEC);
+	if (fd < 0)
+		return NULL;	/* errno set by open */
+
+	ZfsState *zfs = driver_alloc(sizeof *zfs);
+	zfs->port = port;
+	zfs->fd = fd;
+	atomic_init(&zfs->refs, 1);
+	return zfs;
+}
+
+static void
+zfs_state_destroy(ZfsState *zfs)
+{
+	(void) close(zfs->fd);
+	driver_free(zfs);
+}
+
+static inline ZfsState *
+zfs_state_retain(ZfsState *zfs)
+{
+	atomic_fetch_add_explicit(&zfs->refs, 1, memory_order_relaxed);
+	return zfs;
+}
+
+static inline void
+zfs_state_release(ZfsState *zfs)
+{
+	if (atomic_fetch_sub_explicit(&zfs->refs, 1, memory_order_acq_rel) == 1)
+		zfs_state_destroy(zfs);
+}
+
 static inline ZfsRequest *
-request_alloc(ZfsState *zfs, ErlDrvBinary *input)
+request_create(ZfsState *zfs, ErlDrvBinary *input)
 {
 	ZfsRequest *req = driver_alloc(sizeof *req);
-	req->zfs = zfs;
+	req->zfs = zfs_state_retain(zfs);
 	driver_binary_inc_refc(input);
 	req->input = input;
 	req->history = NULL;
@@ -131,12 +168,13 @@ request_alloc(ZfsState *zfs, ErlDrvBinary *input)
 }
 
 static inline void
-request_free(ZfsRequest *req)
+request_destroy(ZfsRequest *req)
 {
 	driver_free(req->history);
 	driver_free_binary(req->input);
 	ei_x_free(&req->ref);
 	ei_x_free(&req->res);
+	zfs_state_release(req->zfs);
 	driver_free(req);
 }
 
@@ -146,7 +184,7 @@ _zfs_fatal(ZfsRequest *req, const char *func, int line)
 #ifndef NDEBUG
 	(void) fprintf(stderr, "[%s:%d] fatal error\n", func, line);
 #endif
-	request_free(req);
+	request_destroy(req);
 }
 
 #define zfs_fatal(req) _zfs_fatal((req), __func__, __LINE__)
@@ -154,24 +192,16 @@ _zfs_fatal(ZfsRequest *req, const char *func, int line)
 static ErlDrvData
 zfs_start(ErlDrvPort port, char *command __unused)
 {
-	ZfsState *zfs = driver_alloc(sizeof *zfs);
-	zfs->port = port;
-	zfs->fd = open(ZFS_DEV, O_RDWR | O_CLOEXEC);
-	if (zfs->fd < 0) {
-		int error = errno;
-		driver_free(zfs);
-		errno = error;
+	ZfsState *zfs = zfs_state_create(port);
+	if (zfs == NULL)
 		return ERL_DRV_ERROR_ERRNO;
-	}
 	return (ErlDrvData)zfs;
 }
 
 static void
 zfs_stop(ErlDrvData drv_data)
 {
-	ZfsState *zfs = (ZfsState *)drv_data;
-	(void) close(zfs->fd);
-	driver_free(zfs);
+	zfs_state_release((ZfsState *)drv_data);
 }
 
 static int
@@ -193,6 +223,13 @@ zfs_ioctl(ZfsRequest *req)
 
 static void zfs_async(void *);
 
+/* Called instead of zfs_ready_async when the port closed first. */
+static void
+zfs_async_free(void *async_data)
+{
+	request_destroy(async_data);
+}
+
 static void
 zfs_outputv(ErlDrvData drv_data, ErlIOVec *ev)
 {
@@ -200,7 +237,7 @@ zfs_outputv(ErlDrvData drv_data, ErlIOVec *ev)
 	if (ev->vsize != 2 || ev->binv[1] == NULL)
 		return;
 
-	ZfsRequest *req = request_alloc((ZfsState *)drv_data, ev->binv[1]);
+	ZfsRequest *req = request_create((ZfsState *)drv_data, ev->binv[1]);
 	const char *buf = ev->iov[1].iov_base;
 
 	/*
@@ -313,7 +350,8 @@ zfs_outputv(ErlDrvData drv_data, ErlIOVec *ev)
 	NVLIST(src);
 	NVLIST(conf);
 
-	if (driver_async(req->zfs->port, NULL, zfs_async, req, NULL) == -1)
+	if (driver_async(req->zfs->port, NULL, zfs_async, req,
+	    zfs_async_free) == -1)
 		return zfs_fatal(req);
 }
 
@@ -705,7 +743,7 @@ zfs_ready_async(ErlDrvData drv_data, ErlDrvThreadData thread_data)
 	};
 	erl_drv_output_term(port, spec, nitems(spec));
 
-	request_free(req);
+	request_destroy(req);
 }
 
 static ErlDrvEntry zfs_driver_entry = {
