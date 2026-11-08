@@ -37,6 +37,7 @@ typedef struct zfs_request {
 	zfs_ioc_t ioc;
 	zfs_cmd_t zc;
 	char *history;
+	ErlDrvBinary *input;	/* keeps src/conf nvlists alive */
 	ei_x_buff res;
 } ZfsRequest;
 
@@ -117,10 +118,12 @@ encode_zfs_cmd_res_headerv(ZfsRequest *req, int error, const char *fmt,
 }
 
 static inline ZfsRequest *
-request_alloc(ZfsState *zfs)
+request_alloc(ZfsState *zfs, ErlDrvBinary *input)
 {
 	ZfsRequest *req = driver_alloc(sizeof *req);
 	req->zfs = zfs;
+	driver_binary_inc_refc(input);
+	req->input = input;
 	req->history = NULL;
 	ei_x_new_with_version(&req->ref);
 	ei_x_new_with_version(&req->res);
@@ -131,6 +134,7 @@ static inline void
 request_free(ZfsRequest *req)
 {
 	driver_free(req->history);
+	driver_free_binary(req->input);
 	ei_x_free(&req->ref);
 	ei_x_free(&req->res);
 	driver_free(req);
@@ -190,9 +194,14 @@ zfs_ioctl(ZfsRequest *req)
 static void zfs_async(void *);
 
 static void
-zfs_output(ErlDrvData drv_data, char *buf, ErlDrvSizeT len)
+zfs_outputv(ErlDrvData drv_data, ErlIOVec *ev)
 {
-	ZfsRequest *req = request_alloc((ZfsState *)drv_data);
+	/* iov[0] is reserved for the driver; devzfs sends one binary. */
+	if (ev->vsize != 2 || ev->binv[1] == NULL)
+		return;
+
+	ZfsRequest *req = request_alloc((ZfsState *)drv_data, ev->binv[1]);
+	const char *buf = ev->iov[1].iov_base;
 
 	/*
 	 * Interpret buf to determine command.  Different commands use different
@@ -703,7 +712,7 @@ static ErlDrvEntry zfs_driver_entry = {
 	.init = NULL,
 	.start = zfs_start,
 	.stop = zfs_stop,
-	.output = zfs_output,
+	.output = NULL,
 	.ready_input = NULL,
 	.ready_output = NULL,
 	.driver_name = ZFS_DRV,
@@ -711,7 +720,7 @@ static ErlDrvEntry zfs_driver_entry = {
 	.handle = NULL,
 	.control = NULL,
 	.timeout = NULL,
-	.outputv = NULL,
+	.outputv = zfs_outputv,
 	.ready_async = zfs_ready_async,
 	.flush = NULL,
 	.call = NULL,
