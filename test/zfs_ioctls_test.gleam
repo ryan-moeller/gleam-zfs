@@ -49,7 +49,8 @@ const test_channel_program_memlimit = 262_144
 
 // 256 KiB
 
-const test_channel_program = "
+const test_channel_program =
+  "
   args = ...
   DS = args['DS']
   res = {}
