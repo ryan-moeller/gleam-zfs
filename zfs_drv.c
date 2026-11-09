@@ -399,6 +399,18 @@ zfs_result(ZfsRequest *req, ErlDrvBinary *result, int error)
 	driver_free_binary(result);
 }
 
+/* Reply with the nvlist if the kernel filled one, otherwise just the errno. */
+static void
+zfs_finish(ZfsRequest *req, ErlDrvBinary *result, int error)
+{
+	if (result != NULL && req->zc.zc_nvlist_dst_filled)
+		return zfs_result(req, result, error);
+	driver_free_binary(result);
+	if (error != 0)
+		return zfs_error(req, error, "ioctl(%s) failed", ZFS_DEV);
+	zfs_success(req);
+}
+
 #define zfs_ioctl_checked(...) ({ \
 	if ((error = zfs_ioctl(req)) != 0) { \
 		__VA_ARGS__; \
@@ -412,12 +424,8 @@ zfs_result(ZfsRequest *req, ErlDrvBinary *result, int error)
 		assert(zc->zc_nvlist_dst_size > result->orig_size); \
 		result = realloc_result(result, zc); \
 	} \
-	if (error != 0) { \
-		if (zc->zc_nvlist_dst_filled) \
-			return zfs_result(req, result, error); \
-		driver_free_binary(result); \
-		return zfs_error(req, error, "ioctl(%s) failed", ZFS_DEV); \
-	} \
+	if (error != 0) \
+		return zfs_finish(req, result, error); \
 })
 
 /* A basic ioctl returning unit (nothing) or an error. */
@@ -440,10 +448,7 @@ zfs_ioctl_nvlist(ZfsRequest *req)
 
 	result = realloc_result(result, zc);
 	zfs_ioctl_resize_checked();
-	if (zc->zc_nvlist_dst_filled)
-		return zfs_result(req, result, error);
-	driver_free_binary(result);
-	zfs_success(req);
+	zfs_finish(req, result, error);
 }
 
 static inline void
@@ -458,10 +463,7 @@ zfs_ioctl_pool_configs(ZfsRequest *req)
 	zfs_ioctl_resize_checked(({
 		zc->zc_cookie = gen; /* reset gen */
 	}));
-	if (zc->zc_nvlist_dst_filled)
-		return zfs_result(req, result, error);
-	driver_free_binary(result);
-	zfs_success(req);
+	zfs_finish(req, result, error);
 }
 
 static inline void
@@ -536,10 +538,11 @@ zfs_ioctl_list_next(ZfsRequest *req)
 		zc->zc_cookie = cookie;
 		zc->zc_objset_stats.dds_creation_txg = 0;
 	}
-	if (error == ESRCH)
-		zfs_success(req);
-	else
-		zfs_result(req, result, error);
+	if (error == ESRCH) {
+		driver_free_binary(result);
+		return zfs_unit(req, ESRCH);
+	}
+	zfs_finish(req, result, error);
 }
 
 static inline void
@@ -597,15 +600,9 @@ zfs_ioctl_channel_program(ZfsRequest *req)
 {
 	ErlDrvBinary *result = NULL;
 	zfs_cmd_t *zc = &req->zc;
-	int error;
 
 	result = realloc_result(result, zc);
-	zfs_ioctl_checked(({
-		if (zc->zc_nvlist_dst_filled)
-			return zfs_result(req, result, error);
-		driver_free_binary(result);
-	}));
-	zfs_result(req, result, error);
+	zfs_finish(req, result, zfs_ioctl(req));
 }
 
 static void
