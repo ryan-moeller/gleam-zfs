@@ -958,6 +958,68 @@ pub fn snapshot_list_next_test() {
   common_cleanup(vdevs)
 }
 
+// dataset_list_next, without properties
+pub fn dataset_list_next_simple_test() {
+  let vdevs = common_setup()
+  common_dataset_create(test_dataset_name)
+  let hdl = ioctls.open_handle()
+  let assert Ok(Some(#(dataset, _cookie, _stats, None))) =
+    ioctls.dataset_list_next(hdl, test_pool_name, True, 0)
+  assert ioctls.close_handle(hdl)
+  assert dataset == test_dataset_name
+  common_cleanup(vdevs)
+}
+
+// dataset_list_next, past the last entry
+pub fn dataset_list_next_end_test() {
+  let vdevs = common_setup()
+  common_dataset_create(test_dataset_name)
+  let hdl = ioctls.open_handle()
+  let assert Ok(Some(#(_dataset, cookie, _stats, Some(_props)))) =
+    ioctls.dataset_list_next(hdl, test_pool_name, False, 0)
+  let assert Ok(None) =
+    ioctls.dataset_list_next(hdl, test_pool_name, False, cookie)
+  assert ioctls.close_handle(hdl)
+  common_cleanup(vdevs)
+}
+
+// dataset_list_next, on a dataset that does not exist
+pub fn dataset_list_next_missing_test() {
+  let vdevs = common_setup()
+  let hdl = ioctls.open_handle()
+  let assert Ok(None) =
+    ioctls.dataset_list_next(hdl, test_dataset_name, False, 0)
+  assert ioctls.close_handle(hdl)
+  common_cleanup(vdevs)
+}
+
+// snapshot_list_next, without properties
+pub fn snapshot_list_next_simple_test() {
+  let vdevs = common_setup()
+  common_dataset_create(test_dataset_name)
+  common_snapshot_create(test_snapshot_name)
+  let hdl = ioctls.open_handle()
+  let assert Ok(Some(#(snapshot, _cookie, _stats, None))) =
+    ioctls.snapshot_list_next(hdl, test_dataset_name, True, 0)
+  assert ioctls.close_handle(hdl)
+  assert snapshot == test_snapshot_name
+  common_cleanup(vdevs)
+}
+
+// snapshot_list_next, past the last entry
+pub fn snapshot_list_next_end_test() {
+  let vdevs = common_setup()
+  common_dataset_create(test_dataset_name)
+  common_snapshot_create(test_snapshot_name)
+  let hdl = ioctls.open_handle()
+  let assert Ok(Some(#(_snapshot, cookie, _stats, Some(_props)))) =
+    ioctls.snapshot_list_next(hdl, test_dataset_name, False, 0)
+  let assert Ok(None) =
+    ioctls.snapshot_list_next(hdl, test_dataset_name, False, cookie)
+  assert ioctls.close_handle(hdl)
+  common_cleanup(vdevs)
+}
+
 // get_fsacl
 pub fn get_fsacl_test() {
   let vdevs = common_setup()
