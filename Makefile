@@ -31,8 +31,8 @@ OBJS	=	$(SRCS:.c=.o)
 
 all:	$(TARGET)
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+.c.o:
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(TARGET): priv $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS)
