@@ -28,5 +28,10 @@ jobs:
           run: |
             set -e
             make CPPFLAGS=-DZFS_DEBUG
-            gleam test
+            # gleam test exits 0 if the VM is killed by a signal, so wrap erl
+            # to report that as an ordinary nonzero exit status.
+            wrapper=$(mktemp -d)
+            printf '#!/bin/sh\n%s "$@"\nexit $?\n' "$(command -v erl)" > "$wrapper/erl"
+            chmod +x "$wrapper/erl"
+            PATH="$wrapper:$PATH" gleam test
             gleam format --check src test
