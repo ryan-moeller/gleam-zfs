@@ -394,7 +394,6 @@ zfs_result(ZfsRequest *req, ErlDrvBinary *result, int error)
 
 	encode_zfs_cmd_res_header(req, error);
 	encode_some_header(x);
-	assert(zc->zc_nvlist_dst_filled);
 	assert(zc->zc_nvlist_dst_size <= result->orig_size);
 	ei_x_encode_binary(x, result->orig_bytes, zc->zc_nvlist_dst_size);
 	driver_free_binary(result);
